@@ -15,7 +15,7 @@ import re
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.8-flash"
 TIMEOUT_MS = 30000
 SKILLS = ["자료조사", "글쓰기", "PPT", "발표", "정리", "코딩", "디자인", "실험", "기타"]
 
@@ -139,12 +139,21 @@ def _clean_goals(data) -> list[dict] | None:
         return None
 
 
-def make_plan(notice: str) -> dict:
+def _plan_prompt(notice: str, members: int, deadline: str) -> str:
+    return (
+        f"팀원 수: {members}명. 목표 수는 팀원 수의 배수인 {2 * members}개 또는 {3 * members}개로 한다. "
+        "목표들을 팀원 수만큼 묶었을 때 묶음마다 예상 시간 합이 같아지게 크기를 정한다.\n"
+        f"최종 마감일: {deadline or '팀장이 따로 정함'} (팀장이 따로 정했으므로 마감일이 공지에 없다고 경고하지 않는다)\n\n"
+        f"과제 공지:\n<<<\n{notice}\n>>>"
+    )
+
+
+def make_plan(notice: str, members: int = 4, deadline: str = "") -> dict:
     warnings = _notice_warnings(notice)
     if not has_key():
         return {"goals": _fake_goals(), "warnings": warnings, "fake": True}
     try:
-        data = _ask(PLAN_SYSTEM, f"과제 공지:\n<<<\n{notice}\n>>>", PLAN_SCHEMA)
+        data = _ask(PLAN_SYSTEM, _plan_prompt(notice, members, deadline), PLAN_SCHEMA)
     except Exception as e:  # 연결 실패, 시간 초과, 키 오류 등
         log.warning("Gemini make_plan 실패: %s", type(e).__name__)
         return {"goals": _fake_goals(), "warnings": warnings + ["AI에 연결하지 못해 연습용 가짜 답을 보여 줍니다."], "fake": True}

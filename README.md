@@ -11,7 +11,7 @@ copy .env.example .env
 .venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000 --env-file .env
 ```
 
-`.env`에 `GEMINI_API_KEY`를 넣으면 진짜 AI(Gemini)를 쓴다. 키가 없거나 AI가 실패하면 연습용 가짜 답으로 돌아가고 화면에 "연습용 가짜 답"이 보인다. 모델은 `GEMINI_MODEL`(기본 `gemini-2.5-flash`). `.env`는 git에 올라가지 않는다.
+`.env`에 `GEMINI_API_KEY`를 넣으면 진짜 AI(Gemini)를 쓴다. 키가 없거나 AI가 실패하면 연습용 가짜 답으로 돌아가고 화면에 "연습용 가짜 답"이 보인다. 모델은 `GEMINI_MODEL`(기본 `gemini-3.8-flash`. `gemini-2.5-flash`는 새 사용자에게 막혀 있음). `.env`는 git에 올라가지 않는다.
 
 브라우저에서 http://127.0.0.1:8000 을 연다. 테스트는 `.venv\Scripts\python.exe -m pytest`.
 

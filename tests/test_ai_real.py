@@ -44,6 +44,13 @@ def test_plan_from_ai(monkeypatch, key):
     assert "<<<\n" + NOTICE + "\n>>>" in calls[0]["prompt"]
 
 
+def test_plan_prompt_has_team_size_and_deadline(monkeypatch, key):
+    calls = use(monkeypatch, {"goals": goals(), "warnings": []})
+    ai.make_plan(NOTICE, 3, "2026-12-10")
+    assert "팀원 수: 3명" in calls[0]["prompt"] and "6개 또는 9개" in calls[0]["prompt"]
+    assert "2026-12-10" in calls[0]["prompt"]
+
+
 def test_plan_keeps_notice_check(monkeypatch, key):
     use(monkeypatch, {"goals": goals(), "warnings": []})
     out = ai.make_plan("팀 보고서 내기")
