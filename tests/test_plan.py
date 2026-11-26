@@ -29,7 +29,7 @@ def test_ai_fake_plan_not_empty():
     assert all(g["title"] and g["done_rule"] and 2 <= g["hours"] <= 4 for g in out["goals"])
 
 
-@pytest.mark.parametrize("n", [3, 4, 5])
+@pytest.mark.parametrize("n", [2, 3, 4, 5])
 def test_every_goal_filled_and_balanced(n):
     out = make_schedule(req(n), TODAY)
     for g in out["goals"]:
@@ -83,8 +83,13 @@ def test_api_plan_ok():
     assert len(res.json()["goals"]) > 0
 
 
-def test_api_plan_rejects_two_members():
-    body = {"notice": NOTICE, "deadline": (date.today() + timedelta(days=14)).isoformat(), "members": members(2)}
+def test_api_plan_rejects_one_member():
+    body = {"notice": NOTICE, "deadline": (date.today() + timedelta(days=14)).isoformat(), "members": members(1)}
+    assert client.post("/api/plan", json=body).status_code == 422
+
+
+def test_api_plan_rejects_six_members():
+    body = {"notice": NOTICE, "deadline": (date.today() + timedelta(days=14)).isoformat(), "members": members(6)}
     assert client.post("/api/plan", json=body).status_code == 422
 
 

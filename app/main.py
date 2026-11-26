@@ -44,7 +44,7 @@ class Member(BaseModel):
 class PlanRequest(BaseModel):
     notice: str = Field(min_length=1)
     deadline: date
-    members: list[Member] = Field(min_length=3, max_length=5)
+    members: list[Member] = Field(min_length=2, max_length=5)
 
 
 @app.get("/health")

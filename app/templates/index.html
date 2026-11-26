@@ -40,7 +40,7 @@
     <label for="deadline">최종 마감일</label>
     <input type="date" id="deadline">
 
-    <label>팀원 (3–5명)</label>
+    <label>팀원 (2–5명)</label>
     <div class="member head"><span>이름</span><span>메일</span><span>주당 가능 시간</span><span>잘하는 것</span><span></span></div>
     <div id="members"></div>
     <button type="button" id="add-member">팀원 추가</button>
@@ -62,7 +62,7 @@
   </div>
 
   <script>
-    const MIN = 3, MAX = 5;
+    const MIN = 2, MAX = 5;
     const membersBox = document.getElementById("members");
     const addBtn = document.getElementById("add-member");
 
