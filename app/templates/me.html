@@ -108,7 +108,8 @@
         document.getElementById("title").textContent = `${body.name}님의 할 일`;
         const total = body.goals.reduce((s, g) => s + g.hours, 0);
         const done = body.goals.filter(g => g.status === "통과").length;
-        document.getElementById("sub").textContent = `할 일 ${body.goals.length}개 중 ${done}개 통과, 예상 ${total}시간 · 최종 마감 ${body.deadline}`;
+        const day = body.day_offset ? ` · 오늘(시연) ${body.today}` : "";
+        document.getElementById("sub").textContent = `할 일 ${body.goals.length}개 중 ${done}개 통과, 예상 ${total}시간 · 최종 마감 ${body.deadline}${day}`;
         const box = document.getElementById("goals");
         box.replaceChildren();
         const nextId = (body.goals.find(g => g.status === "할 일" || g.status === "보완 필요") || {}).id;
@@ -117,6 +118,7 @@
           const h = el("h3", "", g.title);
           h.append(el("span", statusClass(g.status), g.status));
           if (g.id === nextId) h.append(el("span", "tag next", "다음 할 일"));
+          if (g.overdue) h.append(el("span", "tag s-보완", "마감 지남"));
           card.append(h);
           card.append(el("div", "meta", `마감 ${g.due} · 예상 ${g.hours}시간`));
           card.append(el("div", "rule", `완료 기준: ${g.done_rule}`));

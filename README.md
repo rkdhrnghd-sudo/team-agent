@@ -34,6 +34,9 @@ py -3.13 -m venv .venv
 할 일 상태: `할 일` → 제출 → AI가 통과면 `통과`, 아니면 `팀장 확인 중` → 팀장이 `통과` 또는 `보완 필요`(이유 필수, 보완 횟수 +1) → 다시 제출.
 | `GET /api/status` | `?t=팀장 링크 값` (팀원 링크는 `share_board`일 때만) | `{"today", "team_planned", "team_passed", "contribution": [{"name", "planned", "passed", "share", "progress", "on_time", "late", "fix_count", "overdue"}], "share_board"}` |
 | `GET /board.js` | 없음 | 기여도 판 그리는 스크립트(팀장, 팀원 화면이 같이 씀) |
+| `POST /api/clock` | `{"lead", "days": 1–30}` 또는 `{"lead", "reset": true}` | `{"today", "day_offset", "max": 60}` |
+
+**시연용 날짜 넘기기:** 팀장 화면에서 그 팀의 날짜만 앞으로 옮긴다(최대 60일, 뒤로는 '오늘로 돌아가기'만). 마감 지남, 늦게 냄, 기여도 판이 옮긴 날짜로 계산된다. `/api/today`, `/api/review`에 `today`, `day_offset`이 같이 온다.
 
 기여도 = 그 사람이 통과한 예상 시간 ÷ 팀 전체가 통과한 예상 시간. 진행률 = 통과한 시간 ÷ 맡은 시간. 팀원에게도 보여 줄지는 승인할 때 정한다(`share_board`, 기본은 팀장만). 응답 없음(같은 알림 3번)은 알림 기능이 생기면 더한다.
 

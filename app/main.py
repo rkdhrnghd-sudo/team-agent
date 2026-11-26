@@ -87,6 +87,12 @@ class ReviewRequest(BaseModel):
     note: str = Field(default="", max_length=500)
 
 
+class ClockRequest(BaseModel):
+    lead: str
+    days: int = Field(default=1, ge=1, le=30)
+    reset: bool = False
+
+
 # 할 일 상태
 TODO, WAIT, FIX, PASS = "할 일", "팀장 확인 중", "보완 필요", "통과"
 
@@ -147,8 +153,16 @@ def read_token(token: str) -> dict:
 
 
 def today() -> date:
-    """오늘 날짜. 시연용 날짜 넘기기를 만들 때 여기만 바꾼다."""
+    """진짜 오늘 날짜."""
     return date.today()
+
+
+MAX_DEMO_DAYS = 60
+
+
+def team_today(team: dict) -> date:
+    """그 팀의 오늘. 시연용 날짜 넘기기로 앞당긴 날수(day_offset)를 더한다."""
+    return today() + timedelta(days=team.get("day_offset", 0))
 
 
 def _role(token: str, role: str) -> dict:
@@ -201,7 +215,7 @@ def approve(req: ApproveRequest, request: Request):
     return {"team_id": team_id, "lead_url": f"{base}lead?t={lead}", "links": links, "fake_store": store.FAKE}
 
 
-def _goal_view(g: dict, st: dict) -> dict:
+def _goal_view(g: dict, st: dict, now: date) -> dict:
     return {
         "id": g["id"],
         "title": g["title"],
@@ -211,7 +225,12 @@ def _goal_view(g: dict, st: dict) -> dict:
         "status": st["status"],
         "reasons": st["reasons"],
         "fix_count": st["fix_count"],
+        "overdue": st["status"] in (TODO, FIX) and date.fromisoformat(g["due"]) < now,
     }
+
+
+def _clock(team: dict) -> dict:
+    return {"today": team_today(team).isoformat(), "day_offset": team.get("day_offset", 0)}
 
 
 @app.get("/api/today")
@@ -220,8 +239,15 @@ def today_goals(member: str):
     data = _role(member, "member")
     team = _team(data["t"])
     mine = sorted((g for g in team["goals"] if g["owner"] == data["n"]), key=lambda g: (g["due"], g["id"]))
-    goals = [_goal_view(g, team["state"][str(g["id"])]) for g in mine]
-    return {"name": data["n"], "deadline": team["deadline"], "goals": goals, "share_board": team.get("share_board", False)}
+    now = team_today(team)
+    goals = [_goal_view(g, team["state"][str(g["id"])], now) for g in mine]
+    return {
+        "name": data["n"],
+        "deadline": team["deadline"],
+        "goals": goals,
+        "share_board": team.get("share_board", False),
+        **_clock(team),
+    }
 
 
 @app.post("/api/submit")
@@ -238,7 +264,7 @@ def submit(req: SubmitRequest):
         if st["status"] in (WAIT, PASS):
             raise HTTPException(409, f"지금은 낼 수 없습니다(상태: {st['status']}).")
         check = ai.check_submission(g["done_rule"], req.content)
-        now = today()
+        now = team_today(team)
         st["history"].append({
             "at": now.isoformat(),
             "content": req.content,
@@ -258,12 +284,19 @@ def review_list(lead: str):
     """팀장 화면: 모든 할 일의 상태와 마지막 제출, AI 검수 결과."""
     data = _role(lead, "lead")
     team = _team(data["t"])
+    now = team_today(team)
     goals = []
     for g in team["goals"]:
         st = team["state"][str(g["id"])]
-        view = {**_goal_view(g, st), "owner": g["owner"], "last": st["history"][-1] if st["history"] else None}
+        view = {**_goal_view(g, st, now), "owner": g["owner"], "last": st["history"][-1] if st["history"] else None}
         goals.append(view)
-    return {"deadline": team["deadline"], "members": team["members"], "goals": goals, "fake_store": store.FAKE}
+    return {
+        "deadline": team["deadline"],
+        "members": team["members"],
+        "goals": goals,
+        "fake_store": store.FAKE,
+        **_clock(team),
+    }
 
 
 @app.post("/api/review")
@@ -292,7 +325,7 @@ def review(req: ReviewRequest):
             st["fix_count"] += 1
             last["lead"] = "보완 요청"
         store.save(data["t"], team)
-    return _goal_view(g, st)
+    return _goal_view(g, st, team_today(team))
 
 
 def contribution(team: dict, now: date) -> dict:
@@ -336,7 +369,21 @@ def status(t: str):
     team = _team(data["t"])
     if data["r"] == "member" and not team.get("share_board"):
         raise HTTPException(403, "이 팀은 기여도 판을 팀장만 봅니다.")
-    return {**contribution(team, today()), "share_board": team.get("share_board", False)}
+    return {**contribution(team, team_today(team)), "share_board": team.get("share_board", False)}
+
+
+@app.post("/api/clock")
+def clock(req: ClockRequest):
+    """시연용 날짜 넘기기. 팀장만, 그 팀만 바뀐다. 앞으로만 가고, reset이면 진짜 오늘로 돌아온다."""
+    data = _role(req.lead, "lead")
+    with store.locked():
+        team = _team(data["t"])
+        if req.reset:
+            team["day_offset"] = 0
+        else:
+            team["day_offset"] = min(MAX_DEMO_DAYS, team.get("day_offset", 0) + req.days)
+        store.save(data["t"], team)
+    return {"today": team_today(team).isoformat(), "day_offset": team["day_offset"], "max": MAX_DEMO_DAYS}
 
 
 @app.post("/api/plan")
