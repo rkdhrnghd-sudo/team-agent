@@ -33,3 +33,36 @@ def make_plan(notice: str) -> dict:
     if not re.search(r"\d+\s*(쪽|장|분|페이지|매|자|단어)", notice):
         warnings.append("공지에 분량이 보이지 않습니다. 공지 확인 필요")
     return {"goals": goals, "warnings": warnings, "fake": True}
+
+
+def check_submission(done_rule: str, content: str) -> dict:
+    """완료 기준을 쉼표로 나눠 항목마다 채웠는지 본다. 지금은 연습용 가짜 검수(줄 수와 출처 표시만 봄).
+
+    -> {"result": "통과" | "보완 필요" | "팀장 확인", "items": [{"rule", "ok": True/False/None, "why"}], "fake": bool}
+    ok가 None이면 글자만으로 판단하기 어려운 항목이라 팀장에게 넘긴다.
+    """
+    text = content.strip()
+    lines = [l for l in text.splitlines() if l.strip()]
+    items = []
+    for part in [p.strip() for p in done_rule.split(",") if p.strip()]:
+        m = re.search(r"(\d+)\s*(개|장|줄|쪽|회|표)", part)
+        if not text:
+            items.append({"rule": part, "ok": False, "why": "제출한 내용이 없습니다."})
+        elif "출처" in part and "http" not in text and "출처" not in text:
+            items.append({"rule": part, "ok": False, "why": "출처(링크나 '출처:')가 보이지 않습니다."})
+        elif m:
+            need = int(m.group(1))
+            items.append({
+                "rule": part,
+                "ok": len(lines) >= need,
+                "why": f"내용 {len(lines)}줄, 기준 {need}{m.group(2)}",
+            })
+        else:
+            items.append({"rule": part, "ok": None, "why": "글자만으로 판단하기 어렵습니다. 팀장 확인 필요"})
+    if any(i["ok"] is False for i in items):
+        result = "보완 필요"
+    elif any(i["ok"] is None for i in items):
+        result = "팀장 확인"
+    else:
+        result = "통과"
+    return {"result": result, "items": items, "fake": True}
