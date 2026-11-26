@@ -490,7 +490,7 @@ def make_schedule(req: PlanRequest, today: date) -> dict:
     if len(set(names)) != len(names):
         raise HTTPException(422, "같은 이름이 두 번 들어갔습니다. 구분되게 바꿔 주세요(예: 민수A).")
 
-    draft = ai.make_plan(req.notice)
+    draft = ai.make_plan(req.notice, len(req.members), req.deadline.isoformat())
     goals = draft["goals"]
     warnings = list(draft["warnings"])
 
