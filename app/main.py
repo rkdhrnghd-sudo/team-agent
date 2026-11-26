@@ -1,9 +1,16 @@
+import base64
+import hashlib
+import hmac
+import json
+import os
 import re
+import secrets
+import zlib
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -13,6 +20,10 @@ app = FastAPI()
 
 TEMPLATES = Path(__file__).parent / "templates"
 EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+# 개인 링크 서명 키. 환경변수가 없으면 켤 때마다 새로 만든다(앱을 다시 켜면 옛 링크는 안 열림).
+LINK_SECRET = os.environ.get("LINK_SECRET", "").encode() or secrets.token_bytes(32)
+MAX_TOKEN = 6000
 
 
 class Member(BaseModel):
@@ -47,6 +58,21 @@ class PlanRequest(BaseModel):
     members: list[Member] = Field(min_length=2, max_length=5)
 
 
+class Goal(BaseModel):
+    id: int
+    title: str
+    hours: float
+    owner: str
+    due: date
+    done_rule: str
+
+
+class ApproveRequest(BaseModel):
+    deadline: date
+    members: list[str] = Field(min_length=2, max_length=5)
+    goals: list[Goal] = Field(min_length=1, max_length=50)
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -55,6 +81,74 @@ def health():
 @app.get("/", response_class=HTMLResponse)
 def home():
     return (TEMPLATES / "index.html").read_text(encoding="utf-8")
+
+
+@app.get("/me", response_class=HTMLResponse)
+def me_page():
+    return (TEMPLATES / "me.html").read_text(encoding="utf-8")
+
+
+def _b64(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+def _unb64(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _sign(body: bytes) -> bytes:
+    return hmac.new(LINK_SECRET, body, hashlib.sha256).digest()[:16]
+
+
+def make_token(data: dict) -> str:
+    body = zlib.compress(json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode())
+    return _b64(body) + "." + _b64(_sign(body))
+
+
+def read_token(token: str) -> dict:
+    try:
+        if len(token) > MAX_TOKEN:
+            raise ValueError
+        a, b = token.split(".")
+        body, sig = _unb64(a), _unb64(b)
+    except ValueError:
+        raise HTTPException(400, "링크가 올바르지 않습니다.")
+    if not hmac.compare_digest(sig, _sign(body)):
+        raise HTTPException(403, "링크가 올바르지 않거나 바뀌었습니다. 팀장에게 새 링크를 받으세요.")
+    return json.loads(zlib.decompress(body))
+
+
+@app.post("/api/approve")
+def approve(req: ApproveRequest, request: Request):
+    """팀장이 계획을 승인하면 팀원마다 자기 할 일만 담은 개인 링크를 만든다. 메일은 아직 보내지 않는다."""
+    if len(set(req.members)) != len(req.members):
+        raise HTTPException(422, "같은 이름이 두 번 들어갔습니다.")
+    unknown = {g.owner for g in req.goals} - set(req.members)
+    if unknown:
+        raise HTTPException(422, f"팀원 명단에 없는 담당자가 있습니다: {', '.join(sorted(unknown))}")
+    base = str(request.base_url)
+    links = []
+    for name in req.members:
+        mine = sorted((g for g in req.goals if g.owner == name), key=lambda g: (g.due, g.id))
+        token = make_token({
+            "v": 1,
+            "n": name,
+            "d": req.deadline.isoformat(),
+            "g": [[g.id, g.title, g.hours, g.due.isoformat(), g.done_rule] for g in mine],
+        })
+        links.append({"name": name, "goals": len(mine), "url": f"{base}me?t={token}"})
+    return {"links": links}
+
+
+@app.get("/api/today")
+def today_goals(member: str):
+    """개인 링크 값으로 그 사람의 할 일만 돌려준다."""
+    data = read_token(member)
+    goals = [
+        {"id": i, "title": t, "hours": h, "due": d, "done_rule": r}
+        for i, t, h, d, r in data["g"]
+    ]
+    return {"name": data["n"], "deadline": data["d"], "goals": goals}
 
 
 @app.post("/api/plan")
@@ -157,6 +251,9 @@ def make_schedule(req: PlanRequest, today: date) -> dict:
     emails = [m.email.lower() for m in req.members]
     if len(set(emails)) != len(emails):
         raise HTTPException(422, "같은 메일이 두 번 들어갔습니다.")
+    names = [m.name for m in req.members]
+    if len(set(names)) != len(names):
+        raise HTTPException(422, "같은 이름이 두 번 들어갔습니다. 구분되게 바꿔 주세요(예: 민수A).")
 
     draft = ai.make_plan(req.notice)
     goals = draft["goals"]

@@ -19,7 +19,10 @@
     button:disabled { opacity: 0.5; cursor: default; }
     #errors { color: #b00020; margin-top: 12px; }
     #summary { margin-top: 16px; padding: 12px; background: #f3f6ff; border-radius: 8px; }
-    #plan { margin-top: 24px; }
+    #plan, #links { margin-top: 24px; }
+    #link-list li { margin-bottom: 10px; word-break: break-all; }
+    #link-list a { font-size: 13px; }
+    #link-list button { margin-left: 6px; padding: 2px 10px; font-size: 13px; }
     .badge { font-size: 13px; font-weight: normal; background: #fff3cd; color: #7a5800; padding: 2px 8px; border-radius: 10px; vertical-align: middle; }
     #plan-warnings div { background: #fff3cd; padding: 6px 10px; border-radius: 6px; margin-bottom: 6px; }
     table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -59,6 +62,13 @@
     </table>
     <h3>사람별 예상 시간</h3>
     <ul id="plan-loads"></ul>
+    <button type="button" class="main" id="approve">계획 승인하고 개인 링크 만들기</button>
+  </div>
+
+  <div id="links" hidden>
+    <h2>팀원별 개인 링크</h2>
+    <p class="intro">각 링크를 그 팀원에게만 보내세요. 링크를 연 사람은 자기 할 일만 봅니다. 메일 보내기는 아직 없습니다.</p>
+    <ul id="link-list"></ul>
   </div>
 
   <script>
@@ -125,6 +135,8 @@
       });
       const emails = data.members.map(m => m.email.toLowerCase()).filter(Boolean);
       if (new Set(emails).size !== emails.length) errors.push("같은 메일이 두 번 들어갔습니다.");
+      const names = data.members.map(m => m.name).filter(Boolean);
+      if (new Set(names).size !== names.length) errors.push("같은 이름이 두 번 들어갔습니다. 구분되게 바꿔 주세요(예: 민수A).");
       return errors;
     }
 
@@ -156,6 +168,53 @@
       td.textContent = text;
       row.append(td);
     }
+
+    let lastPlan = null;
+
+    function showLinks(links) {
+      const list = document.getElementById("link-list");
+      list.replaceChildren();
+      links.forEach(l => {
+        const li = document.createElement("li");
+        const who = document.createElement("strong");
+        who.textContent = `${l.name} (할 일 ${l.goals}개)`;
+        const a = document.createElement("a");
+        a.href = l.url;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.textContent = "링크 열기";
+        const copy = document.createElement("button");
+        copy.type = "button";
+        copy.textContent = "복사";
+        copy.addEventListener("click", async () => {
+          try { await navigator.clipboard.writeText(l.url); copy.textContent = "복사됨"; }
+          catch { copy.textContent = "복사 안 됨: 링크 열기를 오른쪽 클릭(길게 눌러) 복사"; }
+        });
+        li.append(who, document.createElement("br"), a, copy);
+        list.append(li);
+      });
+      document.getElementById("links").hidden = false;
+    }
+
+    document.getElementById("approve").addEventListener("click", async () => {
+      if (!lastPlan) return;
+      const btn = document.getElementById("approve");
+      btn.disabled = true;
+      try {
+        const res = await fetch("/api/approve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(lastPlan),
+        });
+        const body = await res.json();
+        if (!res.ok) { showErrors(serverErrors(body.detail)); btn.disabled = false; return; }
+        showLinks(body.links);
+        btn.textContent = "승인 완료";
+      } catch {
+        showErrors(["서버에 연결하지 못했습니다."]);
+        btn.disabled = false;
+      }
+    });
 
     function showPlan(plan) {
       document.getElementById("fake-badge").hidden = !plan.fake;
@@ -191,6 +250,8 @@
       const errors = check(data);
       showErrors(errors);
       document.getElementById("plan").hidden = true;
+      document.getElementById("links").hidden = true;
+      lastPlan = null;
       if (errors.length) { document.getElementById("summary").hidden = true; return; }
       showSummary(data);
       const btn = document.getElementById("make-plan");
@@ -205,6 +266,10 @@
         const body = await res.json();
         if (!res.ok) { showErrors(serverErrors(body.detail)); return; }
         showPlan(body);
+        lastPlan = { deadline: data.deadline, members: data.members.map(m => m.name), goals: body.goals };
+        const approveBtn = document.getElementById("approve");
+        approveBtn.disabled = false;
+        approveBtn.textContent = "계획 승인하고 개인 링크 만들기";
       } catch {
         showErrors(["서버에 연결하지 못했습니다."]);
       } finally {
