@@ -24,7 +24,14 @@
     button.pass { background: #1e7d32; border-color: #1e7d32; color: #fff; }
     button.fix { background: #b00020; border-color: #b00020; color: #fff; }
     #error { color: #b00020; }
+    .bar { display: inline-block; width: 70px; height: 10px; background: #e6e6e6; border-radius: 5px; overflow: hidden; vertical-align: middle; }
+    .bar .fill { height: 100%; background: #2457d6; }
+    .bar-label { margin-left: 6px; font-size: 13px; }
+    tr.sum td { font-weight: bold; background: #fafafa; }
+    td.warn { color: #b00020; font-weight: bold; }
+    .board-note { font-size: 13px; color: #666; }
   </style>
+  <script src="/board.js"></script>
 </head>
 <body>
   <h1>팀장 화면 <span id="store-badge" class="badge" hidden>연습용 저장</span></h1>
@@ -33,6 +40,9 @@
 
   <h2>확인할 것</h2>
   <div id="checks"></div>
+
+  <h2>기여도 판 <span id="share-note" class="badge"></span></h2>
+  <div id="board"></div>
 
   <h2>전체 할 일</h2>
   <table>
@@ -106,6 +116,12 @@
         const waiting = body.goals.filter(g => g.status === "팀장 확인 중");
         waiting.forEach(g => checks.append(checkCard(g)));
         if (!waiting.length) checks.append(el("p", "sub", "지금 확인할 제출물이 없습니다."));
+        const st = await fetch("/api/status?t=" + encodeURIComponent(token));
+        const board = await st.json();
+        if (st.ok) {
+          renderBoard(document.getElementById("board"), board);
+          document.getElementById("share-note").textContent = board.share_board ? "팀원도 봄" : "팀장만 봄";
+        }
         const all = document.getElementById("all");
         all.replaceChildren();
         body.goals.forEach(g => {

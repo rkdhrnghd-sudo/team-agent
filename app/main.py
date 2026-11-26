@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field, field_validator
 
 from app import ai, store
@@ -71,6 +71,7 @@ class ApproveRequest(BaseModel):
     deadline: date
     members: list[str] = Field(min_length=2, max_length=5)
     goals: list[Goal] = Field(min_length=1, max_length=50)
+    share_board: bool = False  # 팀원에게도 기여도 판을 보여 줄지(팀이 처음에 동의해서 정함)
 
 
 class SubmitRequest(BaseModel):
@@ -108,6 +109,11 @@ def me_page():
 @app.get("/lead", response_class=HTMLResponse)
 def lead_page():
     return (TEMPLATES / "lead.html").read_text(encoding="utf-8")
+
+
+@app.get("/board.js")
+def board_js():
+    return Response((TEMPLATES / "board.js").read_text(encoding="utf-8"), media_type="text/javascript")
 
 
 def _b64(b: bytes) -> str:
@@ -181,6 +187,7 @@ def approve(req: ApproveRequest, request: Request):
         "goals": [{**g.model_dump(), "due": g.due.isoformat()} for g in req.goals],
         "state": {str(g.id): {"status": TODO, "fix_count": 0, "reasons": [], "history": []} for g in req.goals},
         "approved": today().isoformat(),
+        "share_board": req.share_board,
     }
     with store.locked():
         store.save(team_id, team)
@@ -214,7 +221,7 @@ def today_goals(member: str):
     team = _team(data["t"])
     mine = sorted((g for g in team["goals"] if g["owner"] == data["n"]), key=lambda g: (g["due"], g["id"]))
     goals = [_goal_view(g, team["state"][str(g["id"])]) for g in mine]
-    return {"name": data["n"], "deadline": team["deadline"], "goals": goals}
+    return {"name": data["n"], "deadline": team["deadline"], "goals": goals, "share_board": team.get("share_board", False)}
 
 
 @app.post("/api/submit")
@@ -286,6 +293,50 @@ def review(req: ReviewRequest):
             last["lead"] = "보완 요청"
         store.save(data["t"], team)
     return _goal_view(g, st)
+
+
+def contribution(team: dict, now: date) -> dict:
+    """기여도 판. 기여도 = 사람별 통과한 예상 시간 합 ÷ 팀 전체 통과 시간 합.
+    진행률 = 사람별 통과한 예상 시간 ÷ 맡은 예상 시간."""
+    rows = {
+        n: {"name": n, "planned": 0.0, "passed": 0.0, "on_time": 0, "late": 0, "fix_count": 0, "overdue": 0}
+        for n in team["members"]
+    }
+    for g in team["goals"]:
+        st = team["state"][str(g["id"])]
+        r = rows[g["owner"]]
+        r["planned"] += g["hours"]
+        r["fix_count"] += st["fix_count"]
+        if st["status"] == PASS:
+            r["passed"] += g["hours"]
+            r["on_time" if st.get("on_time", True) else "late"] += 1
+        elif st["status"] in (TODO, FIX) and date.fromisoformat(g["due"]) < now:
+            r["overdue"] += 1
+    team_planned = sum(r["planned"] for r in rows.values())
+    team_passed = sum(r["passed"] for r in rows.values())
+    out = []
+    for r in rows.values():
+        r["share"] = round(r["passed"] / team_passed, 3) if team_passed else 0.0
+        r["progress"] = round(r["passed"] / r["planned"], 3) if r["planned"] else 0.0
+        out.append(r)
+    return {
+        "today": now.isoformat(),
+        "team_planned": team_planned,
+        "team_passed": team_passed,
+        "contribution": out,
+    }
+
+
+@app.get("/api/status")
+def status(t: str):
+    """기여도 판. 팀장 링크는 항상, 팀원 링크는 팀이 보여 주기로 정했을 때만 볼 수 있다."""
+    data = read_token(t)
+    if data.get("v") != 2 or data.get("r") not in ("lead", "member"):
+        raise HTTPException(403, "이 화면에 쓰는 링크가 아닙니다.")
+    team = _team(data["t"])
+    if data["r"] == "member" and not team.get("share_board"):
+        raise HTTPException(403, "이 팀은 기여도 판을 팀장만 봅니다.")
+    return {**contribution(team, today()), "share_board": team.get("share_board", False)}
 
 
 @app.post("/api/plan")

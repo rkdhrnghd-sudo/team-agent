@@ -23,7 +23,7 @@ py -3.13 -m venv .venv
 | `GET /health` | 없음 | `{"status": "ok"}` |
 | `GET /` | 없음 | 첫 화면(HTML) |
 | `POST /api/plan` | `{"notice": 공지 글, "deadline": "YYYY-MM-DD", "members": [{"name", "email", "hours_per_week", "good_at"}]}` | `{"goals": [{"id", "title", "hours", "owner", "due", "done_rule"}], "loads": [{"name", "hours"}], "gap": 0–1, "warnings": [글], "fake": 가짜 답이면 true}` |
-| `POST /api/approve` | `{"deadline", "members": [이름], "goals": plan에서 받은 goals}` | `{"team_id", "lead_url", "links": [{"name", "goals": 개수, "url"}], "fake_store"}` |
+| `POST /api/approve` | `{"deadline", "members": [이름], "goals": plan에서 받은 goals, "share_board": false}` | `{"team_id", "lead_url", "links": [{"name", "goals": 개수, "url"}], "fake_store"}` |
 | `GET /me` | `?t=개인 링크 값` | 팀원 개인 화면(HTML) |
 | `GET /api/today` | `?member=개인 링크 값` | `{"name", "deadline", "goals": [{"id", "title", "hours", "due", "done_rule", "status", "reasons", "fix_count"}]}` |
 | `POST /api/submit` | `{"member": 개인 링크 값, "goal_id", "content": 5000자 이하}` | `{"result": "통과" / "보완 필요" / "팀장 확인", "items": [{"rule", "ok", "why"}], "status", "fake"}` |
@@ -32,7 +32,10 @@ py -3.13 -m venv .venv
 | `POST /api/review` | `{"lead", "goal_id", "decision": "통과" / "보완 요청", "note"}` | 바뀐 할 일 하나 |
 
 할 일 상태: `할 일` → 제출 → AI가 통과면 `통과`, 아니면 `팀장 확인 중` → 팀장이 `통과` 또는 `보완 필요`(이유 필수, 보완 횟수 +1) → 다시 제출.
-| `GET /api/status` | `?team_id=` | `{"goals": [...], "contribution": [{"name", "hours", "share", "on_time", "no_reply"}]}` |
+| `GET /api/status` | `?t=팀장 링크 값` (팀원 링크는 `share_board`일 때만) | `{"today", "team_planned", "team_passed", "contribution": [{"name", "planned", "passed", "share", "progress", "on_time", "late", "fix_count", "overdue"}], "share_board"}` |
+| `GET /board.js` | 없음 | 기여도 판 그리는 스크립트(팀장, 팀원 화면이 같이 씀) |
+
+기여도 = 그 사람이 통과한 예상 시간 ÷ 팀 전체가 통과한 예상 시간. 진행률 = 통과한 시간 ÷ 맡은 시간. 팀원에게도 보여 줄지는 승인할 때 정한다(`share_board`, 기본은 팀장만). 응답 없음(같은 알림 3번)은 알림 기능이 생기면 더한다.
 
 | 파일 | 담당 |
 |---|---|

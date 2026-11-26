@@ -26,13 +26,28 @@
     .result li.bad { color: #b00020; }
     .result li.ok { color: #1e7d32; }
     #error { color: #b00020; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border-bottom: 1px solid #ddd; padding: 5px; text-align: left; }
+    th { background: #f4f4f4; }
+    .bar { display: inline-block; width: 50px; height: 8px; background: #e6e6e6; border-radius: 4px; overflow: hidden; vertical-align: middle; }
+    .bar .fill { height: 100%; background: #2457d6; }
+    .bar-label { margin-left: 4px; }
+    tr.sum td { font-weight: bold; background: #fafafa; }
+    td.warn { color: #b00020; font-weight: bold; }
+    .board-note { font-size: 12px; color: #666; }
+    #board-wrap { margin-top: 28px; overflow-x: auto; }
   </style>
+  <script src="/board.js"></script>
 </head>
 <body>
   <h1 id="title">내 할 일</h1>
   <p class="sub" id="sub"></p>
   <div id="error"></div>
   <div id="goals"></div>
+  <div id="board-wrap" hidden>
+    <h2>팀 기여도 판</h2>
+    <div id="board"></div>
+  </div>
 
   <script>
     const token = new URLSearchParams(location.search).get("t");
@@ -115,6 +130,13 @@
           box.append(card);
         });
         if (!body.goals.length) box.append(el("p", "", "맡은 할 일이 없습니다."));
+        if (body.share_board) {
+          const st = await fetch("/api/status?t=" + encodeURIComponent(token));
+          if (st.ok) {
+            renderBoard(document.getElementById("board"), await st.json());
+            document.getElementById("board-wrap").hidden = false;
+          }
+        }
       } catch {
         err.textContent = "서버에 연결하지 못했습니다.";
       }
