@@ -90,17 +90,24 @@
       rows.forEach(r => { r.querySelector(".remove").disabled = rows.length <= MIN; });
     }
 
-    function addMember() {
+    function addMember(v = {}) {
       const row = document.createElement("div");
       row.className = "member";
+      const name = field("text", "name", "이름");
+      const email = field("email", "email", "메일");
       const hours = field("number", "hours", "예: 6");
       hours.min = "0";
+      const good = field("text", "good", "예: 자료조사, PPT");
+      name.value = v.name || "";
+      email.value = v.email || "";
+      hours.value = v.hours ?? "";
+      good.value = v.good || "";
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "remove";
       remove.textContent = "빼기";
       remove.addEventListener("click", () => { row.remove(); refreshButtons(); });
-      row.append(field("text", "name", "이름"), field("email", "email", "메일"), hours, field("text", "good", "예: 자료조사, PPT"), remove);
+      row.append(name, email, hours, good, remove);
       membersBox.append(row);
       refreshButtons();
     }
@@ -243,7 +250,7 @@
       return ["계획을 만들지 못했습니다."];
     }
 
-    addBtn.addEventListener("click", addMember);
+    addBtn.addEventListener("click", () => addMember());
     document.getElementById("team-form").addEventListener("submit", async e => {
       e.preventDefault();
       const data = collect();
@@ -278,7 +285,20 @@
       }
     });
 
-    for (let i = 0; i < 4; i++) addMember();
+    // 바로 시험해 볼 수 있게 넣어 둔 기본값(연습용). 실제로 쓸 때는 지우고 새로 넣는다.
+    const DEFAULT_NOTICE = "화학공정설계 팀 보고서: 공정 하나를 골라 개선안을 A4 10쪽 보고서와 발표 10분으로 제출. 평가: 내용 60, 발표 40.";
+    const DEFAULT_MEMBERS = [
+      { name: "민수", email: "minsu@example.com", hours: 6, good: "자료조사" },
+      { name: "지영", email: "jiyoung@example.com", hours: 8, good: "PPT, 발표" },
+      { name: "현우", email: "hyunwoo@example.com", hours: 6, good: "글쓰기" },
+      { name: "서연", email: "seoyeon@example.com", hours: 5, good: "정리" },
+    ];
+    document.getElementById("notice").value = DEFAULT_NOTICE;
+    const due = new Date();
+    due.setDate(due.getDate() + 14);
+    document.getElementById("deadline").value =
+      `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, "0")}-${String(due.getDate()).padStart(2, "0")}`;
+    DEFAULT_MEMBERS.forEach(addMember);
   </script>
 </body>
 </html>
