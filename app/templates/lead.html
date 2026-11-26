@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>팀장 화면 - 팀플 관리 에이전트</title>
+  <style>
+    body { font-family: sans-serif; max-width: 800px; margin: 32px auto; padding: 0 16px; line-height: 1.6; color: #222; }
+    .sub { color: #555; margin-top: 0; }
+    .badge { font-size: 13px; font-weight: normal; background: #fff3cd; color: #7a5800; padding: 2px 8px; border-radius: 10px; vertical-align: middle; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { border-bottom: 1px solid #ddd; padding: 6px; text-align: left; vertical-align: top; }
+    th { background: #f4f4f4; }
+    .s-통과 { color: #1e7d32; font-weight: bold; }
+    .s-보완 { color: #b00020; font-weight: bold; }
+    .s-팀장 { color: #a06a00; font-weight: bold; }
+    .check { border: 1px solid #e0b34a; background: #fffaf0; border-radius: 8px; padding: 12px; margin-top: 12px; }
+    .check h3 { margin: 0 0 4px; font-size: 16px; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 8px; font-family: inherit; max-height: 240px; overflow: auto; }
+    ul.items li.bad { color: #b00020; }
+    ul.items li.ok { color: #1e7d32; }
+    input { font: inherit; width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid #bbb; border-radius: 6px; }
+    button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid #888; background: #f4f4f4; cursor: pointer; margin: 6px 6px 0 0; }
+    button.pass { background: #1e7d32; border-color: #1e7d32; color: #fff; }
+    button.fix { background: #b00020; border-color: #b00020; color: #fff; }
+    #error { color: #b00020; }
+  </style>
+</head>
+<body>
+  <h1>팀장 화면 <span id="store-badge" class="badge" hidden>연습용 저장</span></h1>
+  <p class="sub" id="sub"></p>
+  <div id="error"></div>
+
+  <h2>확인할 것</h2>
+  <div id="checks"></div>
+
+  <h2>전체 할 일</h2>
+  <table>
+    <thead><tr><th>#</th><th>할 일</th><th>담당</th><th>마감</th><th>상태</th><th>보완 횟수</th></tr></thead>
+    <tbody id="all"></tbody>
+  </table>
+
+  <script>
+    const token = new URLSearchParams(location.search).get("t");
+
+    function el(tag, cls, text) {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined) e.textContent = text;
+      return e;
+    }
+
+    function checkCard(g) {
+      const card = el("div", "check");
+      card.append(el("h3", "", `${g.title} · ${g.owner}`));
+      card.append(el("div", "", `완료 기준: ${g.done_rule}`));
+      const last = g.last;
+      card.append(el("div", "", `AI 검수${last.fake ? "(연습용 가짜)" : ""}: ${last.result} · 제출 ${last.at}`));
+      const ul = el("ul", "items");
+      last.items.forEach(i => {
+        const mark = i.ok === true ? "채움" : i.ok === false ? "못 채움" : "판단 어려움";
+        ul.append(el("li", i.ok === true ? "ok" : i.ok === false ? "bad" : "", `${i.rule} — ${mark} (${i.why})`));
+      });
+      card.append(ul);
+      card.append(el("div", "", "제출 내용"), el("pre", "", last.content));
+      const note = el("input");
+      note.placeholder = "보완 요청에 덧붙일 말(선택, 판단 어려움만 있으면 꼭 적기)";
+      note.maxLength = 500;
+      const out = el("div");
+      const fix = el("button", "fix", "보완 요청 보내기");
+      const pass = el("button", "pass", "통과로 하기");
+      async function decide(decision) {
+        fix.disabled = pass.disabled = true;
+        try {
+          const res = await fetch("/api/review", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lead: token, goal_id: g.id, decision, note: note.value }),
+          });
+          const body = await res.json();
+          if (!res.ok) { out.replaceChildren(el("div", "", typeof body.detail === "string" ? body.detail : "처리하지 못했습니다.")); fix.disabled = pass.disabled = false; return; }
+          load();
+        } catch {
+          out.replaceChildren(el("div", "", "서버에 연결하지 못했습니다."));
+          fix.disabled = pass.disabled = false;
+        }
+      }
+      fix.addEventListener("click", () => decide("보완 요청"));
+      pass.addEventListener("click", () => decide("통과"));
+      card.append(note, fix, pass, out);
+      return card;
+    }
+
+    async function load() {
+      const err = document.getElementById("error");
+      if (!token) { err.textContent = "팀장 링크가 아닙니다."; return; }
+      try {
+        const res = await fetch("/api/review?lead=" + encodeURIComponent(token));
+        const body = await res.json();
+        if (!res.ok) { err.textContent = typeof body.detail === "string" ? body.detail : "열지 못했습니다."; return; }
+        document.getElementById("store-badge").hidden = !body.fake_store;
+        const passed = body.goals.filter(g => g.status === "통과").length;
+        document.getElementById("sub").textContent = `팀원 ${body.members.length}명 · 할 일 ${body.goals.length}개 중 ${passed}개 통과 · 최종 마감 ${body.deadline}`;
+        const checks = document.getElementById("checks");
+        checks.replaceChildren();
+        const waiting = body.goals.filter(g => g.status === "팀장 확인 중");
+        waiting.forEach(g => checks.append(checkCard(g)));
+        if (!waiting.length) checks.append(el("p", "sub", "지금 확인할 제출물이 없습니다."));
+        const all = document.getElementById("all");
+        all.replaceChildren();
+        body.goals.forEach(g => {
+          const tr = el("tr");
+          [g.id, g.title, g.owner, g.due].forEach(t => tr.append(el("td", "", t)));
+          tr.append(el("td", "s-" + g.status.split(" ")[0], g.status));
+          tr.append(el("td", "", g.fix_count));
+          all.append(tr);
+        });
+      } catch {
+        err.textContent = "서버에 연결하지 못했습니다.";
+      }
+    }
+    load();
+  </script>
+</body>
+</html>

@@ -66,8 +66,11 @@
   </div>
 
   <div id="links" hidden>
+    <h2>팀장 화면</h2>
+    <p class="intro">제출물 검수 결과를 확인하고 보완 요청을 보내는 곳입니다. 이 링크는 팀장만 가지고 있으세요.</p>
+    <p><a id="lead-link" target="_blank" rel="noopener">팀장 화면 열기</a></p>
     <h2>팀원별 개인 링크</h2>
-    <p class="intro">각 링크를 그 팀원에게만 보내세요. 링크를 연 사람은 자기 할 일만 봅니다. 메일 보내기는 아직 없습니다.</p>
+    <p class="intro">각 링크를 그 팀원에게만 보내세요. 링크를 연 사람은 자기 할 일만 보고 결과물을 냅니다. 메일 보내기는 아직 없습니다.</p>
     <ul id="link-list"></ul>
   </div>
 
@@ -178,7 +181,9 @@
 
     let lastPlan = null;
 
-    function showLinks(links) {
+    function showLinks(body) {
+      const links = body.links;
+      document.getElementById("lead-link").href = body.lead_url;
       const list = document.getElementById("link-list");
       list.replaceChildren();
       links.forEach(l => {
@@ -215,7 +220,7 @@
         });
         const body = await res.json();
         if (!res.ok) { showErrors(serverErrors(body.detail)); btn.disabled = false; return; }
-        showLinks(body.links);
+        showLinks(body);
         btn.textContent = "승인 완료";
       } catch {
         showErrors(["서버에 연결하지 못했습니다."]);

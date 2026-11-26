@@ -10,9 +10,21 @@
     .goal { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-top: 12px; }
     .goal.next { border-color: #2457d6; background: #f3f6ff; }
     .goal h3 { margin: 0 0 4px; font-size: 17px; }
-    .tag { font-size: 12px; background: #2457d6; color: #fff; padding: 1px 8px; border-radius: 10px; margin-left: 6px; vertical-align: middle; }
+    .tag { font-size: 12px; color: #fff; padding: 1px 8px; border-radius: 10px; margin-left: 6px; vertical-align: middle; background: #888; }
+    .tag.next { background: #2457d6; }
+    .tag.s-통과 { background: #1e7d32; }
+    .tag.s-보완 { background: #b00020; }
+    .tag.s-팀장 { background: #a06a00; }
     .meta { color: #555; font-size: 14px; }
     .rule { margin-top: 6px; }
+    .reasons { margin: 8px 0 0; padding: 8px 8px 8px 24px; background: #fdecee; border-radius: 6px; }
+    .note { margin-top: 8px; font-size: 14px; color: #555; }
+    textarea { width: 100%; min-height: 110px; box-sizing: border-box; font: inherit; padding: 6px 8px; border: 1px solid #bbb; border-radius: 6px; margin-top: 8px; }
+    button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid #2457d6; background: #2457d6; color: #fff; cursor: pointer; margin-top: 6px; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    .result { margin-top: 8px; font-size: 14px; }
+    .result li.bad { color: #b00020; }
+    .result li.ok { color: #1e7d32; }
     #error { color: #b00020; }
   </style>
 </head>
@@ -23,6 +35,8 @@
   <div id="goals"></div>
 
   <script>
+    const token = new URLSearchParams(location.search).get("t");
+
     function el(tag, cls, text) {
       const e = document.createElement(tag);
       if (cls) e.className = cls;
@@ -30,8 +44,46 @@
       return e;
     }
 
+    function statusClass(s) {
+      return "tag s-" + s.split(" ")[0];
+    }
+
+    function itemList(items) {
+      const ul = el("ul", "result");
+      items.forEach(i => {
+        const mark = i.ok === true ? "채움" : i.ok === false ? "못 채움" : "판단 어려움";
+        ul.append(el("li", i.ok === true ? "ok" : i.ok === false ? "bad" : "", `${i.rule} — ${mark} (${i.why})`));
+      });
+      return ul;
+    }
+
+    function submitBox(g, card) {
+      const area = el("textarea");
+      area.placeholder = "결과물을 붙여 넣으세요(글이나 링크). 완료 기준을 보고 항목마다 줄을 나눠 쓰면 검수가 정확해집니다.";
+      area.maxLength = 5000;
+      const btn = el("button", "", g.status === "보완 필요" ? "다시 내기" : "제출하기");
+      const out = el("div");
+      btn.addEventListener("click", async () => {
+        if (!area.value.trim()) { out.replaceChildren(el("div", "note", "내용을 넣어 주세요.")); return; }
+        btn.disabled = true;
+        try {
+          const res = await fetch("/api/submit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ member: token, goal_id: g.id, content: area.value }),
+          });
+          const body = await res.json();
+          if (!res.ok) { out.replaceChildren(el("div", "note", typeof body.detail === "string" ? body.detail : "내지 못했습니다.")); btn.disabled = false; return; }
+          load();
+        } catch {
+          out.replaceChildren(el("div", "note", "서버에 연결하지 못했습니다."));
+          btn.disabled = false;
+        }
+      });
+      card.append(area, btn, out);
+    }
+
     async function load() {
-      const token = new URLSearchParams(location.search).get("t");
       const err = document.getElementById("error");
       if (!token) { err.textContent = "개인 링크가 아닙니다. 팀장에게 받은 링크로 들어오세요."; return; }
       try {
@@ -40,15 +92,26 @@
         if (!res.ok) { err.textContent = typeof body.detail === "string" ? body.detail : "링크를 열지 못했습니다."; return; }
         document.getElementById("title").textContent = `${body.name}님의 할 일`;
         const total = body.goals.reduce((s, g) => s + g.hours, 0);
-        document.getElementById("sub").textContent = `할 일 ${body.goals.length}개, 예상 ${total}시간 · 최종 마감 ${body.deadline}`;
+        const done = body.goals.filter(g => g.status === "통과").length;
+        document.getElementById("sub").textContent = `할 일 ${body.goals.length}개 중 ${done}개 통과, 예상 ${total}시간 · 최종 마감 ${body.deadline}`;
         const box = document.getElementById("goals");
-        body.goals.forEach((g, i) => {
-          const card = el("div", i === 0 ? "goal next" : "goal");
+        box.replaceChildren();
+        const nextId = (body.goals.find(g => g.status === "할 일" || g.status === "보완 필요") || {}).id;
+        body.goals.forEach(g => {
+          const card = el("div", g.id === nextId ? "goal next" : "goal");
           const h = el("h3", "", g.title);
-          if (i === 0) h.append(el("span", "tag", "다음 할 일"));
+          h.append(el("span", statusClass(g.status), g.status));
+          if (g.id === nextId) h.append(el("span", "tag next", "다음 할 일"));
           card.append(h);
           card.append(el("div", "meta", `마감 ${g.due} · 예상 ${g.hours}시간`));
           card.append(el("div", "rule", `완료 기준: ${g.done_rule}`));
+          if (g.status === "보완 필요") {
+            const ul = el("ul", "reasons");
+            g.reasons.forEach(r => ul.append(el("li", "", r)));
+            card.append(el("div", "note", `보완 요청(${g.fix_count}번째): 아래를 채워 다시 내 주세요.`), ul);
+          }
+          if (g.status === "팀장 확인 중") card.append(el("div", "note", "검수 결과를 팀장이 확인하고 있습니다. 확인이 끝나면 여기에 나옵니다."));
+          if (g.status === "할 일" || g.status === "보완 필요") submitBox(g, card);
           box.append(card);
         });
         if (!body.goals.length) box.append(el("p", "", "맡은 할 일이 없습니다."));

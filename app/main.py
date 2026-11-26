@@ -8,13 +8,13 @@ import secrets
 import zlib
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field, field_validator
 
-from app import ai
+from app import ai, store
 
 app = FastAPI()
 
@@ -73,6 +73,23 @@ class ApproveRequest(BaseModel):
     goals: list[Goal] = Field(min_length=1, max_length=50)
 
 
+class SubmitRequest(BaseModel):
+    member: str
+    goal_id: int
+    content: str = Field(min_length=1, max_length=5000)
+
+
+class ReviewRequest(BaseModel):
+    lead: str
+    goal_id: int
+    decision: Literal["통과", "보완 요청"]
+    note: str = Field(default="", max_length=500)
+
+
+# 할 일 상태
+TODO, WAIT, FIX, PASS = "할 일", "팀장 확인 중", "보완 필요", "통과"
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -86,6 +103,11 @@ def home():
 @app.get("/me", response_class=HTMLResponse)
 def me_page():
     return (TEMPLATES / "me.html").read_text(encoding="utf-8")
+
+
+@app.get("/lead", response_class=HTMLResponse)
+def lead_page():
+    return (TEMPLATES / "lead.html").read_text(encoding="utf-8")
 
 
 def _b64(b: bytes) -> str:
@@ -118,42 +140,157 @@ def read_token(token: str) -> dict:
     return json.loads(zlib.decompress(body))
 
 
+def today() -> date:
+    """오늘 날짜. 시연용 날짜 넘기기를 만들 때 여기만 바꾼다."""
+    return date.today()
+
+
+def _role(token: str, role: str) -> dict:
+    data = read_token(token)
+    if data.get("v") != 2 or data.get("r") != role:
+        raise HTTPException(403, "이 화면에 쓰는 링크가 아닙니다.")
+    return data
+
+
+def _team(team_id: str) -> dict:
+    team = store.load(team_id)
+    if team is None:
+        raise HTTPException(404, "팀을 찾을 수 없습니다. 연습용 저장이 지워졌을 수 있습니다.")
+    return team
+
+
+def _goal(team: dict, goal_id: int) -> dict:
+    for g in team["goals"]:
+        if g["id"] == goal_id:
+            return g
+    raise HTTPException(404, "그 할 일을 찾을 수 없습니다.")
+
+
 @app.post("/api/approve")
 def approve(req: ApproveRequest, request: Request):
-    """팀장이 계획을 승인하면 팀원마다 자기 할 일만 담은 개인 링크를 만든다. 메일은 아직 보내지 않는다."""
+    """팀장이 계획을 승인하면 팀을 저장하고, 팀장 링크와 팀원별 개인 링크를 만든다. 메일은 아직 보내지 않는다."""
     if len(set(req.members)) != len(req.members):
         raise HTTPException(422, "같은 이름이 두 번 들어갔습니다.")
     unknown = {g.owner for g in req.goals} - set(req.members)
     if unknown:
         raise HTTPException(422, f"팀원 명단에 없는 담당자가 있습니다: {', '.join(sorted(unknown))}")
+    team_id = secrets.token_urlsafe(9)
+    team = {
+        "deadline": req.deadline.isoformat(),
+        "members": req.members,
+        "goals": [{**g.model_dump(), "due": g.due.isoformat()} for g in req.goals],
+        "state": {str(g.id): {"status": TODO, "fix_count": 0, "reasons": [], "history": []} for g in req.goals},
+        "approved": today().isoformat(),
+    }
+    with store.locked():
+        store.save(team_id, team)
     base = str(request.base_url)
     links = []
     for name in req.members:
-        mine = sorted((g for g in req.goals if g.owner == name), key=lambda g: (g.due, g.id))
-        token = make_token({
-            "v": 1,
-            "n": name,
-            "d": req.deadline.isoformat(),
-            "g": [[g.id, g.title, g.hours, g.due.isoformat(), g.done_rule] for g in mine],
-        })
-        links.append({"name": name, "goals": len(mine), "url": f"{base}me?t={token}"})
-    return {"links": links}
+        token = make_token({"v": 2, "r": "member", "t": team_id, "n": name})
+        count = sum(1 for g in req.goals if g.owner == name)
+        links.append({"name": name, "goals": count, "url": f"{base}me?t={token}"})
+    lead = make_token({"v": 2, "r": "lead", "t": team_id})
+    return {"team_id": team_id, "lead_url": f"{base}lead?t={lead}", "links": links, "fake_store": store.FAKE}
+
+
+def _goal_view(g: dict, st: dict) -> dict:
+    return {
+        "id": g["id"],
+        "title": g["title"],
+        "hours": g["hours"],
+        "due": g["due"],
+        "done_rule": g["done_rule"],
+        "status": st["status"],
+        "reasons": st["reasons"],
+        "fix_count": st["fix_count"],
+    }
 
 
 @app.get("/api/today")
 def today_goals(member: str):
-    """개인 링크 값으로 그 사람의 할 일만 돌려준다."""
-    data = read_token(member)
-    goals = [
-        {"id": i, "title": t, "hours": h, "due": d, "done_rule": r}
-        for i, t, h, d, r in data["g"]
-    ]
-    return {"name": data["n"], "deadline": data["d"], "goals": goals}
+    """개인 링크 값으로 그 사람의 할 일과 검수 상태만 돌려준다."""
+    data = _role(member, "member")
+    team = _team(data["t"])
+    mine = sorted((g for g in team["goals"] if g["owner"] == data["n"]), key=lambda g: (g["due"], g["id"]))
+    goals = [_goal_view(g, team["state"][str(g["id"])]) for g in mine]
+    return {"name": data["n"], "deadline": team["deadline"], "goals": goals}
+
+
+@app.post("/api/submit")
+def submit(req: SubmitRequest):
+    """팀원이 결과물을 내면 AI가 완료 기준과 비교한다.
+    통과면 바로 통과. 보완 필요나 애매하면 팀장 확인 뒤에 팀원에게 알린다."""
+    data = _role(req.member, "member")
+    with store.locked():
+        team = _team(data["t"])
+        g = _goal(team, req.goal_id)
+        if g["owner"] != data["n"]:
+            raise HTTPException(403, "내 할 일만 낼 수 있습니다.")
+        st = team["state"][str(g["id"])]
+        if st["status"] in (WAIT, PASS):
+            raise HTTPException(409, f"지금은 낼 수 없습니다(상태: {st['status']}).")
+        check = ai.check_submission(g["done_rule"], req.content)
+        now = today()
+        st["history"].append({
+            "at": now.isoformat(),
+            "content": req.content,
+            "result": check["result"],
+            "items": check["items"],
+            "fake": check["fake"],
+        })
+        st["status"] = PASS if check["result"] == "통과" else WAIT
+        st["reasons"] = []
+        st["on_time"] = now <= date.fromisoformat(g["due"])
+        store.save(data["t"], team)
+    return {"result": check["result"], "items": check["items"], "status": st["status"], "fake": check["fake"]}
+
+
+@app.get("/api/review")
+def review_list(lead: str):
+    """팀장 화면: 모든 할 일의 상태와 마지막 제출, AI 검수 결과."""
+    data = _role(lead, "lead")
+    team = _team(data["t"])
+    goals = []
+    for g in team["goals"]:
+        st = team["state"][str(g["id"])]
+        view = {**_goal_view(g, st), "owner": g["owner"], "last": st["history"][-1] if st["history"] else None}
+        goals.append(view)
+    return {"deadline": team["deadline"], "members": team["members"], "goals": goals, "fake_store": store.FAKE}
+
+
+@app.post("/api/review")
+def review(req: ReviewRequest):
+    """팀장이 AI 검수 결과를 확인한다. 보완 요청이면 이유가 꼭 있어야 한다."""
+    data = _role(req.lead, "lead")
+    with store.locked():
+        team = _team(data["t"])
+        g = _goal(team, req.goal_id)
+        st = team["state"][str(g["id"])]
+        if st["status"] != WAIT:
+            raise HTTPException(409, f"팀장 확인 중인 할 일이 아닙니다(상태: {st['status']}).")
+        last = st["history"][-1]
+        if req.decision == "통과":
+            st["status"] = PASS
+            st["reasons"] = []
+            last["lead"] = "통과"
+        else:
+            reasons = [f"{i['rule']}: {i['why']}" for i in last["items"] if i["ok"] is not True]
+            if req.note.strip():
+                reasons.append(f"팀장: {req.note.strip()}")
+            if not reasons:
+                raise HTTPException(422, "보완 이유를 적어 주세요.")
+            st["status"] = FIX
+            st["reasons"] = reasons
+            st["fix_count"] += 1
+            last["lead"] = "보완 요청"
+        store.save(data["t"], team)
+    return _goal_view(g, st)
 
 
 @app.post("/api/plan")
 def plan(req: PlanRequest):
-    return make_schedule(req, date.today())
+    return make_schedule(req, today())
 
 
 def _same(a: str, b: str) -> bool:
