@@ -19,6 +19,12 @@
     button:disabled { opacity: 0.5; cursor: default; }
     #errors { color: #b00020; margin-top: 12px; }
     #summary { margin-top: 16px; padding: 12px; background: #f3f6ff; border-radius: 8px; }
+    #plan { margin-top: 24px; }
+    .badge { font-size: 13px; font-weight: normal; background: #fff3cd; color: #7a5800; padding: 2px 8px; border-radius: 10px; vertical-align: middle; }
+    #plan-warnings div { background: #fff3cd; padding: 6px 10px; border-radius: 6px; margin-bottom: 6px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { border-bottom: 1px solid #ddd; padding: 6px; text-align: left; vertical-align: top; }
+    th { background: #f4f4f4; }
     @media (max-width: 600px) { .member { grid-template-columns: 1fr 1fr; } .head { display: none; } }
   </style>
 </head>
@@ -40,10 +46,20 @@
     <button type="button" id="add-member">팀원 추가</button>
 
     <div id="errors"></div>
-    <button type="submit" class="main">입력 확인</button>
+    <button type="submit" class="main" id="make-plan">계획 만들기</button>
   </form>
 
   <div id="summary" hidden></div>
+  <div id="plan" hidden>
+    <h2>작은 목표 계획 <span id="fake-badge" class="badge" hidden>연습용 가짜 답</span></h2>
+    <div id="plan-warnings"></div>
+    <table>
+      <thead><tr><th>#</th><th>목표</th><th>담당</th><th>예상 시간</th><th>마감</th><th>완료 기준</th></tr></thead>
+      <tbody id="plan-goals"></tbody>
+    </table>
+    <h3>사람별 예상 시간</h3>
+    <ul id="plan-loads"></ul>
+  </div>
 
   <script>
     const MIN = 3, MAX = 5;
@@ -132,20 +148,69 @@
         list.append(li);
       });
       box.append(list);
-      const next = document.createElement("div");
-      next.textContent = "다음 단계: 이 내용으로 작은 목표 계획을 만듭니다(준비 중).";
-      box.append(next);
       box.hidden = false;
     }
 
+    function cell(row, text) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      row.append(td);
+    }
+
+    function showPlan(plan) {
+      document.getElementById("fake-badge").hidden = !plan.fake;
+      const warn = document.getElementById("plan-warnings");
+      warn.replaceChildren();
+      plan.warnings.forEach(w => { const d = document.createElement("div"); d.textContent = w; warn.append(d); });
+      const body = document.getElementById("plan-goals");
+      body.replaceChildren();
+      plan.goals.forEach(g => {
+        const tr = document.createElement("tr");
+        [g.id, g.title, g.owner, `${g.hours}시간`, g.due, g.done_rule].forEach(t => cell(tr, t));
+        body.append(tr);
+      });
+      const loads = document.getElementById("plan-loads");
+      loads.replaceChildren();
+      plan.loads.forEach(l => { const li = document.createElement("li"); li.textContent = `${l.name}: ${l.hours}시간`; loads.append(li); });
+      const gap = document.createElement("li");
+      gap.textContent = `가장 많은 사람과 적은 사람 차이: ${Math.round(plan.gap * 100)}%`;
+      loads.append(gap);
+      document.getElementById("plan").hidden = false;
+    }
+
+    function serverErrors(detail) {
+      if (typeof detail === "string") return [detail];
+      if (Array.isArray(detail)) return detail.map(d => (d.msg || "입력값을 확인해 주세요.").replace(/^Value error, /, ""));
+      return ["계획을 만들지 못했습니다."];
+    }
+
     addBtn.addEventListener("click", addMember);
-    document.getElementById("team-form").addEventListener("submit", e => {
+    document.getElementById("team-form").addEventListener("submit", async e => {
       e.preventDefault();
       const data = collect();
       const errors = check(data);
       showErrors(errors);
+      document.getElementById("plan").hidden = true;
       if (errors.length) { document.getElementById("summary").hidden = true; return; }
       showSummary(data);
+      const btn = document.getElementById("make-plan");
+      btn.disabled = true;
+      btn.textContent = "만드는 중…";
+      try {
+        const res = await fetch("/api/plan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        });
+        const body = await res.json();
+        if (!res.ok) { showErrors(serverErrors(body.detail)); return; }
+        showPlan(body);
+      } catch {
+        showErrors(["서버에 연결하지 못했습니다."]);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "계획 만들기";
+      }
     });
 
     for (let i = 0; i < 4; i++) addMember();
