@@ -30,6 +30,9 @@
     tr.sum td { font-weight: bold; background: #fafafa; }
     td.warn { color: #b00020; font-weight: bold; }
     .board-note { font-size: 13px; color: #666; }
+    .clock { border: 1px dashed #2457d6; border-radius: 8px; padding: 10px 12px; margin-top: 12px; background: #f7f9ff; }
+    .clock-note { font-size: 13px; color: #666; margin-top: 4px; }
+    .late-tag { color: #b00020; font-weight: bold; }
   </style>
   <script src="/board.js"></script>
 </head>
@@ -37,6 +40,17 @@
   <h1>팀장 화면 <span id="store-badge" class="badge" hidden>연습용 저장</span></h1>
   <p class="sub" id="sub"></p>
   <div id="error"></div>
+
+  <div class="clock">
+    <strong>시연용 날짜</strong> <span id="clock-today"></span>
+    <span id="clock-offset" class="badge" hidden></span>
+    <div>
+      <button type="button" data-days="1">하루 넘기기</button>
+      <button type="button" data-days="7">일주일 넘기기</button>
+      <button type="button" id="clock-reset">오늘로 돌아가기</button>
+    </div>
+    <div class="clock-note">2–4주 과정을 짧게 보여 주기 위한 기능입니다. 이 팀의 날짜만 바뀝니다(최대 60일).</div>
+  </div>
 
   <h2>확인할 것</h2>
   <div id="checks"></div>
@@ -101,6 +115,36 @@
       return card;
     }
 
+    function showClock(c) {
+      document.getElementById("clock-today").textContent = c.today;
+      const off = document.getElementById("clock-offset");
+      off.hidden = !c.day_offset;
+      off.textContent = `진짜 오늘 +${c.day_offset}일`;
+    }
+
+    async function moveClock(payload) {
+      const buttons = document.querySelectorAll(".clock button");
+      buttons.forEach(b => b.disabled = true);
+      try {
+        const res = await fetch("/api/clock", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lead: token, ...payload }),
+        });
+        const body = await res.json();
+        if (!res.ok) { document.getElementById("error").textContent = typeof body.detail === "string" ? body.detail : "날짜를 바꾸지 못했습니다."; return; }
+        await load();
+      } catch {
+        document.getElementById("error").textContent = "서버에 연결하지 못했습니다.";
+      } finally {
+        buttons.forEach(b => b.disabled = false);
+      }
+    }
+
+    document.querySelectorAll(".clock button[data-days]").forEach(b =>
+      b.addEventListener("click", () => moveClock({ days: Number(b.dataset.days) })));
+    document.getElementById("clock-reset").addEventListener("click", () => moveClock({ reset: true }));
+
     async function load() {
       const err = document.getElementById("error");
       if (!token) { err.textContent = "팀장 링크가 아닙니다."; return; }
@@ -109,6 +153,7 @@
         const body = await res.json();
         if (!res.ok) { err.textContent = typeof body.detail === "string" ? body.detail : "열지 못했습니다."; return; }
         document.getElementById("store-badge").hidden = !body.fake_store;
+        showClock(body);
         const passed = body.goals.filter(g => g.status === "통과").length;
         document.getElementById("sub").textContent = `팀원 ${body.members.length}명 · 할 일 ${body.goals.length}개 중 ${passed}개 통과 · 최종 마감 ${body.deadline}`;
         const checks = document.getElementById("checks");
@@ -127,7 +172,9 @@
         body.goals.forEach(g => {
           const tr = el("tr");
           [g.id, g.title, g.owner, g.due].forEach(t => tr.append(el("td", "", t)));
-          tr.append(el("td", "s-" + g.status.split(" ")[0], g.status));
+          const stTd = el("td", "s-" + g.status.split(" ")[0], g.status);
+          if (g.overdue) stTd.append(el("span", "late-tag", " · 마감 지남"));
+          tr.append(stTd);
           tr.append(el("td", "", g.fix_count));
           all.append(tr);
         });
