@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field, field_validator
 
-from app import ai, store
+from app import ai, mail, store
 
 app = FastAPI()
 
@@ -67,11 +67,33 @@ class Goal(BaseModel):
     done_rule: str
 
 
+class TeamMember(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def email_ok(cls, v: str) -> str:
+        v = v.strip()
+        if not EMAIL.match(v):
+            raise ValueError("메일이 올바르지 않습니다.")
+        return v
+
+
 class ApproveRequest(BaseModel):
     deadline: date
-    members: list[str] = Field(min_length=2, max_length=5)
+    members: list[TeamMember] = Field(min_length=2, max_length=5)
     goals: list[Goal] = Field(min_length=1, max_length=50)
     share_board: bool = False  # 팀원에게도 기여도 판을 보여 줄지(팀이 처음에 동의해서 정함)
+    lead_email: str = ""  # 응답 없음 알림을 받을 팀장 메일(선택)
+
+    @field_validator("lead_email")
+    @classmethod
+    def lead_email_ok(cls, v: str) -> str:
+        v = v.strip()
+        if v and not EMAIL.match(v):
+            raise ValueError("팀장 메일이 올바르지 않습니다.")
+        return v
 
 
 class SubmitRequest(BaseModel):
@@ -85,6 +107,10 @@ class ReviewRequest(BaseModel):
     goal_id: int
     decision: Literal["통과", "보완 요청"]
     note: str = Field(default="", max_length=500)
+
+
+class LeadOnly(BaseModel):
+    lead: str
 
 
 class ClockRequest(BaseModel):
@@ -186,33 +212,135 @@ def _goal(team: dict, goal_id: int) -> dict:
     raise HTTPException(404, "그 할 일을 찾을 수 없습니다.")
 
 
+MAX_OUTBOX = 300
+REMIND_LIMIT = 3  # 같은 할 일 알림이 이 횟수를 넘으면 '응답 없음'
+
+
+def member_url(team: dict, team_id: str, name: str) -> str:
+    return f"{team['base_url']}me?t={make_token({'v': 2, 'r': 'member', 't': team_id, 'n': name})}"
+
+
+def lead_url(team: dict, team_id: str) -> str:
+    return f"{team['base_url']}lead?t={make_token({'v': 2, 'r': 'lead', 't': team_id})}"
+
+
+def notify(team: dict, to_name: str, to_email: str, kind: str, subject: str, body: str, day: date) -> None:
+    """메일을 보내고(연습용이면 기록만) 팀의 보낸 메일함에 남긴다. 저장은 부르는 쪽이 한다."""
+    result = mail.send(to_email, subject, body)
+    team.setdefault("outbox", []).append({
+        "day": day.isoformat(),
+        "to": to_name,
+        "email": to_email,
+        "kind": kind,
+        "subject": subject,
+        "body": body,
+        **result,
+    })
+    team["outbox"] = team["outbox"][-MAX_OUTBOX:]
+
+
+def _goal_lines(goals: list[dict], now: date | None = None) -> str:
+    lines = []
+    for g in goals:
+        tag = ""
+        if now is not None:
+            due = date.fromisoformat(g["due"])
+            tag = " [마감 지남]" if due < now else " [내일 마감]" if due == now + timedelta(days=1) else " [오늘 마감]" if due == now else ""
+        lines.append(f"- {g['title']}{tag} (마감 {g['due']}, 예상 {g['hours']:g}시간)\n  완료 기준: {g['done_rule']}")
+    return "\n".join(lines)
+
+
+def send_plan_mails(team: dict, team_id: str, day: date) -> None:
+    for name in team["members"]:
+        mine = sorted((g for g in team["goals"] if g["owner"] == name), key=lambda g: (g["due"], g["id"]))
+        body = (
+            f"{name}님, 팀장이 팀 과제 계획을 승인했습니다.\n\n"
+            f"맡은 할 일 {len(mine)}개:\n{_goal_lines(mine)}\n\n"
+            f"내 할 일 보기와 제출: {member_url(team, team_id, name)}\n"
+            f"최종 마감: {team['deadline']}\n\n이 링크는 {name}님만 쓰세요."
+        )
+        notify(team, name, team["emails"][name], "계획", f"[팀플] {name}님의 할 일 {len(mine)}개가 정해졌습니다", body, day)
+
+
+def run_daily(team: dict, team_id: str, day: date) -> int:
+    """매일 알림: 사람마다 마감 지났거나 내일까지인 할 일 1–2개만 보낸다. 같은 날은 한 번만.
+    같은 할 일 알림이 3번을 넘으면 '응답 없음'으로 표시하고 팀장에게 알린다. 보낸 메일 수를 돌려준다."""
+    if "emails" not in team or day.isoformat() in team.setdefault("sent_days", []):
+        return 0  # 메일 기능 전에 만든 팀이거나 그날 이미 보냄
+    team["sent_days"].append(day.isoformat())
+    sent = 0
+    for name in team["members"]:
+        pending = [
+            g for g in team["goals"]
+            if g["owner"] == name
+            and team["state"][str(g["id"])]["status"] in (TODO, FIX)
+            and date.fromisoformat(g["due"]) <= day + timedelta(days=1)
+        ]
+        pending = sorted(pending, key=lambda g: (g["due"], g["id"]))[:2]
+        if not pending:
+            continue
+        body = (
+            f"{name}님, 내일까지 할 일입니다.\n\n{_goal_lines(pending, day)}\n\n"
+            f"제출하기: {member_url(team, team_id, name)}"
+        )
+        notify(team, name, team["emails"][name], "매일", f"[팀플] 내일까지 할 일 {len(pending)}개", body, day)
+        sent += 1
+        for g in pending:
+            st = team["state"][str(g["id"])]
+            st["reminders"] = st.get("reminders", 0) + 1
+            if st["reminders"] > REMIND_LIMIT and not st.get("no_reply"):
+                st["no_reply"] = True
+                if team.get("lead_email"):
+                    notify(
+                        team, "팀장", team["lead_email"], "응답 없음",
+                        f"[팀플] {name}님 응답 없음: {g['title']}",
+                        f"'{g['title']}'(마감 {g['due']}) 알림을 {st['reminders']}번 보냈지만 제출이 없습니다.\n"
+                        f"기여도 판에 '응답 없음'으로 남겼습니다. 일정을 다시 짤지 확인해 주세요.\n\n팀장 화면: {lead_url(team, team_id)}",
+                        day,
+                    )
+                    sent += 1
+    return sent
+
+
 @app.post("/api/approve")
 def approve(req: ApproveRequest, request: Request):
-    """팀장이 계획을 승인하면 팀을 저장하고, 팀장 링크와 팀원별 개인 링크를 만든다. 메일은 아직 보내지 않는다."""
-    if len(set(req.members)) != len(req.members):
+    """팀장이 계획을 승인하면 팀을 저장하고, 팀장 링크와 팀원별 개인 링크를 만들고, 팀원마다 첫 계획 메일을 보낸다.
+    승인 전(계획 만들기)에는 메일을 한 통도 보내지 않는다."""
+    names = [m.name.strip() for m in req.members]
+    if len(set(names)) != len(names):
         raise HTTPException(422, "같은 이름이 두 번 들어갔습니다.")
-    unknown = {g.owner for g in req.goals} - set(req.members)
+    unknown = {g.owner for g in req.goals} - set(names)
     if unknown:
         raise HTTPException(422, f"팀원 명단에 없는 담당자가 있습니다: {', '.join(sorted(unknown))}")
     team_id = secrets.token_urlsafe(9)
+    now = today()
     team = {
         "deadline": req.deadline.isoformat(),
-        "members": req.members,
+        "members": names,
+        "emails": {m.name.strip(): m.email for m in req.members},
+        "lead_email": req.lead_email,
         "goals": [{**g.model_dump(), "due": g.due.isoformat()} for g in req.goals],
         "state": {str(g.id): {"status": TODO, "fix_count": 0, "reasons": [], "history": []} for g in req.goals},
-        "approved": today().isoformat(),
+        "approved": now.isoformat(),
         "share_board": req.share_board,
+        "base_url": str(request.base_url),
+        "outbox": [],
     }
+    send_plan_mails(team, team_id, now)
     with store.locked():
         store.save(team_id, team)
-    base = str(request.base_url)
-    links = []
-    for name in req.members:
-        token = make_token({"v": 2, "r": "member", "t": team_id, "n": name})
-        count = sum(1 for g in req.goals if g.owner == name)
-        links.append({"name": name, "goals": count, "url": f"{base}me?t={token}"})
-    lead = make_token({"v": 2, "r": "lead", "t": team_id})
-    return {"team_id": team_id, "lead_url": f"{base}lead?t={lead}", "links": links, "fake_store": store.FAKE}
+    links = [
+        {"name": n, "goals": sum(1 for g in req.goals if g.owner == n), "url": member_url(team, team_id, n)}
+        for n in names
+    ]
+    return {
+        "team_id": team_id,
+        "lead_url": lead_url(team, team_id),
+        "links": links,
+        "fake_store": store.FAKE,
+        "mails": len(team["outbox"]),
+        "fake_mail": mail.is_fake(),
+    }
 
 
 def _goal_view(g: dict, st: dict, now: date) -> dict:
@@ -288,13 +416,21 @@ def review_list(lead: str):
     goals = []
     for g in team["goals"]:
         st = team["state"][str(g["id"])]
-        view = {**_goal_view(g, st, now), "owner": g["owner"], "last": st["history"][-1] if st["history"] else None}
+        view = {
+            **_goal_view(g, st, now),
+            "owner": g["owner"],
+            "last": st["history"][-1] if st["history"] else None,
+            "reminders": st.get("reminders", 0),
+            "no_reply": st.get("no_reply", False),
+        }
         goals.append(view)
     return {
         "deadline": team["deadline"],
         "members": team["members"],
         "goals": goals,
         "fake_store": store.FAKE,
+        "fake_mail": mail.is_fake(),
+        "outbox": list(reversed(team.get("outbox", [])))[:50],
         **_clock(team),
     }
 
@@ -324,6 +460,16 @@ def review(req: ReviewRequest):
             st["reasons"] = reasons
             st["fix_count"] += 1
             last["lead"] = "보완 요청"
+            # 보완 요청 메일은 팀장이 확인한 뒤에만 나간다(바로 여기).
+            name = g["owner"]
+            notify(
+                team, name, team["emails"][name], "보완 요청",
+                f"[팀플] '{g['title']}' 보완 요청",
+                f"{name}님, 팀장이 '{g['title']}' 결과물에 보완을 요청했습니다({st['fix_count']}번째).\n\n"
+                "채울 것:\n" + "\n".join(f"- {r}" for r in reasons) +
+                f"\n\n다시 내기: {member_url(team, data['t'], name)}",
+                team_today(team),
+            )
         store.save(data["t"], team)
     return _goal_view(g, st, team_today(team))
 
@@ -332,11 +478,12 @@ def contribution(team: dict, now: date) -> dict:
     """기여도 판. 기여도 = 사람별 통과한 예상 시간 합 ÷ 팀 전체 통과 시간 합.
     진행률 = 사람별 통과한 예상 시간 ÷ 맡은 예상 시간."""
     rows = {
-        n: {"name": n, "planned": 0.0, "passed": 0.0, "on_time": 0, "late": 0, "fix_count": 0, "overdue": 0}
+        n: {"name": n, "planned": 0.0, "passed": 0.0, "on_time": 0, "late": 0, "fix_count": 0, "overdue": 0, "no_reply": 0}
         for n in team["members"]
     }
     for g in team["goals"]:
         st = team["state"][str(g["id"])]
+        rows[g["owner"]]["no_reply"] += 1 if st.get("no_reply") else 0
         r = rows[g["owner"]]
         r["planned"] += g["hours"]
         r["fix_count"] += st["fix_count"]
@@ -376,14 +523,49 @@ def status(t: str):
 def clock(req: ClockRequest):
     """시연용 날짜 넘기기. 팀장만, 그 팀만 바뀐다. 앞으로만 가고, reset이면 진짜 오늘로 돌아온다."""
     data = _role(req.lead, "lead")
+    mails = 0
     with store.locked():
         team = _team(data["t"])
         if req.reset:
             team["day_offset"] = 0
         else:
-            team["day_offset"] = min(MAX_DEMO_DAYS, team.get("day_offset", 0) + req.days)
+            old = team.get("day_offset", 0)
+            team["day_offset"] = min(MAX_DEMO_DAYS, old + req.days)
+            # 넘긴 날마다 그날의 매일 알림을 돌린다(같은 날은 한 번만)
+            for d in range(old + 1, team["day_offset"] + 1):
+                mails += run_daily(team, data["t"], today() + timedelta(days=d))
         store.save(data["t"], team)
-    return {"today": team_today(team).isoformat(), "day_offset": team["day_offset"], "max": MAX_DEMO_DAYS}
+    return {"today": team_today(team).isoformat(), "day_offset": team["day_offset"], "max": MAX_DEMO_DAYS, "mails": mails}
+
+
+@app.post("/api/daily")
+def daily(req: LeadOnly):
+    """팀장이 '오늘 알림 보내기'를 누르면 그 팀의 오늘 매일 알림을 보낸다(오늘 이미 보냈으면 안 보냄)."""
+    data = _role(req.lead, "lead")
+    with store.locked():
+        team = _team(data["t"])
+        mails = run_daily(team, data["t"], team_today(team))
+        store.save(data["t"], team)
+    return {"today": team_today(team).isoformat(), "mails": mails}
+
+
+@app.post("/api/cron/daily")
+def cron_daily(request: Request):
+    """매일 정해진 시각에 바깥 예약 실행(예: 쿠버네티스 CronJob)이 부르는 주소.
+    CRON_SECRET 환경변수가 없으면 꺼져 있고, 있으면 X-Cron-Secret 머리글이 같아야 한다."""
+    secret = os.environ.get("CRON_SECRET", "")
+    if not secret:
+        raise HTTPException(404, "꺼져 있습니다.")
+    if not hmac.compare_digest(request.headers.get("X-Cron-Secret", ""), secret):
+        raise HTTPException(403, "비밀값이 다릅니다.")
+    total = 0
+    with store.locked():
+        for team_id in store.team_ids():
+            team = store.load(team_id)
+            if team and "emails" in team:
+                total += run_daily(team, team_id, team_today(team))
+                store.save(team_id, team)
+    return {"mails": total}
 
 
 @app.post("/api/plan")

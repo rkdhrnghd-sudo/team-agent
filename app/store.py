@@ -1,6 +1,6 @@
 """저장 담당 파일. 지금은 연습용 임시 저장이다(내 PC의 파일 하나).
 
-배포 전에 서버 밖 저장소(예: DynamoDB)로 바꾼다. 바꿀 때는 아래 load, save, locked 세 개만 바꾸면 된다.
+배포 전에 서버 밖 저장소(예: DynamoDB)로 바꾼다. 바꿀 때는 아래 team_ids, load, save, locked 네 개만 바꾸면 된다.
 팀 하나 = 문서 하나(dict).
 """
 
@@ -30,6 +30,10 @@ def locked():
     """읽고 고쳐서 저장하는 동안 다른 요청이 끼어들지 않게 한다."""
     with _lock:
         yield
+
+
+def team_ids() -> list[str]:
+    return list(_read_all())
 
 
 def load(team_id: str):

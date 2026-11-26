@@ -64,7 +64,10 @@
     </table>
     <h3>사람별 예상 시간</h3>
     <ul id="plan-loads"></ul>
+    <label for="lead-email">팀장 메일 (선택: 같은 할 일에 알림이 3번 넘게 가도 안 내면 여기로 알림)</label>
+    <input type="email" id="lead-email" placeholder="예: leader@example.com">
     <label class="check-line"><input type="checkbox" id="share-board"> 팀원도 기여도 판을 볼 수 있게 하기 (팀이 미리 동의한 경우만)</label>
+    <p class="intro">승인하면 팀원마다 개인 링크가 담긴 첫 계획 메일이 나갑니다. 승인 전에는 메일이 나가지 않습니다.</p>
     <button type="button" class="main" id="approve">계획 승인하고 개인 링크 만들기</button>
   </div>
 
@@ -73,7 +76,8 @@
     <p class="intro">제출물 검수 결과를 확인하고 보완 요청을 보내는 곳입니다. 이 링크는 팀장만 가지고 있으세요.</p>
     <p><a id="lead-link" target="_blank" rel="noopener">팀장 화면 열기</a></p>
     <h2>팀원별 개인 링크</h2>
-    <p class="intro">각 링크를 그 팀원에게만 보내세요. 링크를 연 사람은 자기 할 일만 보고 결과물을 냅니다. 메일 보내기는 아직 없습니다.</p>
+    <p class="intro" id="mail-note"></p>
+    <p class="intro">링크를 연 사람은 자기 할 일만 보고 결과물을 냅니다. 메일이 안 갔으면 아래 링크를 그 팀원에게만 직접 보내세요.</p>
     <ul id="link-list"></ul>
   </div>
 
@@ -186,6 +190,9 @@
 
     function showLinks(body) {
       const links = body.links;
+      document.getElementById("mail-note").textContent = body.fake_mail
+        ? `계획 메일 ${body.mails}통을 만들었습니다(연습용: 실제로는 보내지 않음, 팀장 화면 '보낸 메일'에서 볼 수 있음).`
+        : `팀원 ${body.mails}명에게 계획 메일을 보냈습니다. 실패한 메일은 팀장 화면 '보낸 메일'에서 볼 수 있습니다.`;
       document.getElementById("lead-link").href = body.lead_url;
       const list = document.getElementById("link-list");
       list.replaceChildren();
@@ -219,7 +226,11 @@
         const res = await fetch("/api/approve", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...lastPlan, share_board: document.getElementById("share-board").checked }),
+          body: JSON.stringify({
+            ...lastPlan,
+            share_board: document.getElementById("share-board").checked,
+            lead_email: document.getElementById("lead-email").value.trim(),
+          }),
         });
         const body = await res.json();
         if (!res.ok) { showErrors(serverErrors(body.detail)); btn.disabled = false; return; }
@@ -281,7 +292,7 @@
         const body = await res.json();
         if (!res.ok) { showErrors(serverErrors(body.detail)); return; }
         showPlan(body);
-        lastPlan = { deadline: data.deadline, members: data.members.map(m => m.name), goals: body.goals };
+        lastPlan = { deadline: data.deadline, members: data.members.map(m => ({ name: m.name, email: m.email })), goals: body.goals };
         const approveBtn = document.getElementById("approve");
         approveBtn.disabled = false;
         approveBtn.textContent = "계획 승인하고 개인 링크 만들기";
@@ -307,6 +318,7 @@
     document.getElementById("deadline").value =
       `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, "0")}-${String(due.getDate()).padStart(2, "0")}`;
     DEFAULT_MEMBERS.forEach(addMember);
+    document.getElementById("lead-email").value = "leader@example.com";
   </script>
 </body>
 </html>
