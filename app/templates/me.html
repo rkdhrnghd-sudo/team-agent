@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>내 할 일 - 팀플 관리 에이전트</title>
+  <style>
+    body { font-family: sans-serif; max-width: 640px; margin: 32px auto; padding: 0 16px; line-height: 1.6; color: #222; }
+    .sub { color: #555; margin-top: 0; }
+    .goal { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-top: 12px; }
+    .goal.next { border-color: #2457d6; background: #f3f6ff; }
+    .goal h3 { margin: 0 0 4px; font-size: 17px; }
+    .tag { font-size: 12px; background: #2457d6; color: #fff; padding: 1px 8px; border-radius: 10px; margin-left: 6px; vertical-align: middle; }
+    .meta { color: #555; font-size: 14px; }
+    .rule { margin-top: 6px; }
+    #error { color: #b00020; }
+  </style>
+</head>
+<body>
+  <h1 id="title">내 할 일</h1>
+  <p class="sub" id="sub"></p>
+  <div id="error"></div>
+  <div id="goals"></div>
+
+  <script>
+    function el(tag, cls, text) {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined) e.textContent = text;
+      return e;
+    }
+
+    async function load() {
+      const token = new URLSearchParams(location.search).get("t");
+      const err = document.getElementById("error");
+      if (!token) { err.textContent = "개인 링크가 아닙니다. 팀장에게 받은 링크로 들어오세요."; return; }
+      try {
+        const res = await fetch("/api/today?member=" + encodeURIComponent(token));
+        const body = await res.json();
+        if (!res.ok) { err.textContent = typeof body.detail === "string" ? body.detail : "링크를 열지 못했습니다."; return; }
+        document.getElementById("title").textContent = `${body.name}님의 할 일`;
+        const total = body.goals.reduce((s, g) => s + g.hours, 0);
+        document.getElementById("sub").textContent = `할 일 ${body.goals.length}개, 예상 ${total}시간 · 최종 마감 ${body.deadline}`;
+        const box = document.getElementById("goals");
+        body.goals.forEach((g, i) => {
+          const card = el("div", i === 0 ? "goal next" : "goal");
+          const h = el("h3", "", g.title);
+          if (i === 0) h.append(el("span", "tag", "다음 할 일"));
+          card.append(h);
+          card.append(el("div", "meta", `마감 ${g.due} · 예상 ${g.hours}시간`));
+          card.append(el("div", "rule", `완료 기준: ${g.done_rule}`));
+          box.append(card);
+        });
+        if (!body.goals.length) box.append(el("p", "", "맡은 할 일이 없습니다."));
+      } catch {
+        err.textContent = "서버에 연결하지 못했습니다.";
+      }
+    }
+    load();
+  </script>
+</body>
+</html>
