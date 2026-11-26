@@ -5,14 +5,150 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>팀플 관리 에이전트</title>
   <style>
-    body { font-family: sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; line-height: 1.6; }
+    body { font-family: sans-serif; max-width: 720px; margin: 32px auto; padding: 0 16px; line-height: 1.6; color: #222; }
     h1 { margin-bottom: 4px; }
-    p { color: #555; }
+    .intro { color: #555; margin-top: 0; }
+    label { display: block; font-weight: bold; margin-top: 16px; }
+    textarea, input { font: inherit; padding: 6px 8px; border: 1px solid #bbb; border-radius: 6px; box-sizing: border-box; }
+    textarea { width: 100%; min-height: 140px; }
+    .member { display: grid; grid-template-columns: 1fr 1.4fr 0.7fr 1.2fr auto; gap: 6px; margin-top: 6px; }
+    .member input { width: 100%; }
+    .head { font-size: 13px; color: #666; margin-top: 8px; }
+    button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid #888; background: #f4f4f4; cursor: pointer; }
+    button.main { background: #2457d6; color: #fff; border-color: #2457d6; margin-top: 20px; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    #errors { color: #b00020; margin-top: 12px; }
+    #summary { margin-top: 16px; padding: 12px; background: #f3f6ff; border-radius: 8px; }
+    @media (max-width: 600px) { .member { grid-template-columns: 1fr 1fr; } .head { display: none; } }
   </style>
 </head>
 <body>
   <h1>팀플 관리 에이전트</h1>
-  <p>과제 공지를 넣으면 작은 목표로 쪼개고, 역할과 일정을 나누고, 제출물을 검수하며 기여도를 기록합니다.</p>
-  <p>(준비 중)</p>
+  <p class="intro">과제 공지를 넣으면 작은 목표로 쪼개고, 역할과 일정을 나누고, 제출물을 검수하며 기여도를 기록합니다.</p>
+
+  <h2>팀 만들기</h2>
+  <form id="team-form">
+    <label for="notice">과제 공지</label>
+    <textarea id="notice" placeholder="교수님 공지를 그대로 붙여 넣으세요"></textarea>
+
+    <label for="deadline">최종 마감일</label>
+    <input type="date" id="deadline">
+
+    <label>팀원 (3–5명)</label>
+    <div class="member head"><span>이름</span><span>메일</span><span>주당 가능 시간</span><span>잘하는 것</span><span></span></div>
+    <div id="members"></div>
+    <button type="button" id="add-member">팀원 추가</button>
+
+    <div id="errors"></div>
+    <button type="submit" class="main">입력 확인</button>
+  </form>
+
+  <div id="summary" hidden></div>
+
+  <script>
+    const MIN = 3, MAX = 5;
+    const membersBox = document.getElementById("members");
+    const addBtn = document.getElementById("add-member");
+
+    function field(type, cls, placeholder) {
+      const el = document.createElement("input");
+      el.type = type;
+      el.className = cls;
+      el.placeholder = placeholder;
+      return el;
+    }
+
+    function refreshButtons() {
+      const rows = membersBox.querySelectorAll(".member");
+      addBtn.disabled = rows.length >= MAX;
+      rows.forEach(r => { r.querySelector(".remove").disabled = rows.length <= MIN; });
+    }
+
+    function addMember() {
+      const row = document.createElement("div");
+      row.className = "member";
+      const hours = field("number", "hours", "예: 6");
+      hours.min = "0";
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "remove";
+      remove.textContent = "빼기";
+      remove.addEventListener("click", () => { row.remove(); refreshButtons(); });
+      row.append(field("text", "name", "이름"), field("email", "email", "메일"), hours, field("text", "good", "예: 자료조사, PPT"), remove);
+      membersBox.append(row);
+      refreshButtons();
+    }
+
+    function collect() {
+      const members = [...membersBox.querySelectorAll(".member")].map(r => ({
+        name: r.querySelector(".name").value.trim(),
+        email: r.querySelector(".email").value.trim(),
+        hours_per_week: r.querySelector(".hours").value === "" ? null : Number(r.querySelector(".hours").value),
+        good_at: r.querySelector(".good").value.trim(),
+      }));
+      return {
+        notice: document.getElementById("notice").value.trim(),
+        deadline: document.getElementById("deadline").value,
+        members,
+      };
+    }
+
+    function check(data) {
+      const errors = [];
+      if (!data.notice) errors.push("과제 공지를 넣어 주세요.");
+      if (!data.deadline) errors.push("최종 마감일을 골라 주세요.");
+      else {
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        if (new Date(data.deadline + "T00:00:00") <= today) errors.push("최종 마감일은 내일 이후여야 합니다.");
+      }
+      data.members.forEach((m, i) => {
+        const n = i + 1;
+        if (!m.name) errors.push(`${n}번 팀원 이름을 넣어 주세요.`);
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(m.email)) errors.push(`${n}번 팀원 메일이 올바르지 않습니다.`);
+        if (m.hours_per_week !== null && m.hours_per_week < 0) errors.push(`${n}번 팀원 가능 시간은 0 이상이어야 합니다.`);
+      });
+      const emails = data.members.map(m => m.email.toLowerCase()).filter(Boolean);
+      if (new Set(emails).size !== emails.length) errors.push("같은 메일이 두 번 들어갔습니다.");
+      return errors;
+    }
+
+    function showErrors(errors) {
+      const box = document.getElementById("errors");
+      box.replaceChildren();
+      errors.forEach(e => { const p = document.createElement("div"); p.textContent = e; box.append(p); });
+    }
+
+    function showSummary(data) {
+      const box = document.getElementById("summary");
+      box.replaceChildren();
+      const title = document.createElement("strong");
+      title.textContent = `입력 확인 완료: 팀원 ${data.members.length}명, 마감 ${data.deadline}`;
+      box.append(title);
+      const list = document.createElement("ul");
+      data.members.forEach(m => {
+        const li = document.createElement("li");
+        const hours = m.hours_per_week === null ? "가능 시간 미입력(팀장 확인 필요)" : `주 ${m.hours_per_week}시간`;
+        li.textContent = `${m.name} (${m.email}) · ${hours} · ${m.good_at || "잘하는 것 미입력"}`;
+        list.append(li);
+      });
+      box.append(list);
+      const next = document.createElement("div");
+      next.textContent = "다음 단계: 이 내용으로 작은 목표 계획을 만듭니다(준비 중).";
+      box.append(next);
+      box.hidden = false;
+    }
+
+    addBtn.addEventListener("click", addMember);
+    document.getElementById("team-form").addEventListener("submit", e => {
+      e.preventDefault();
+      const data = collect();
+      const errors = check(data);
+      showErrors(errors);
+      if (errors.length) { document.getElementById("summary").hidden = true; return; }
+      showSummary(data);
+    });
+
+    for (let i = 0; i < 4; i++) addMember();
+  </script>
 </body>
 </html>
