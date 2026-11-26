@@ -18,7 +18,7 @@ py -3.13 -m venv .venv
 |---|---|---|
 | `GET /health` | 없음 | `{"status": "ok"}` |
 | `GET /` | 없음 | 첫 화면(HTML) |
-| `POST /api/plan` | `{"notice": 공지 글, "deadline": "YYYY-MM-DD", "members": [{"name", "email", "hours_per_week", "good_at"}]}` | `{"goals": [{"id", "title", "hours", "owner", "due", "done_rule"}], "warnings": [글]}` |
+| `POST /api/plan` | `{"notice": 공지 글, "deadline": "YYYY-MM-DD", "members": [{"name", "email", "hours_per_week", "good_at"}]}` | `{"goals": [{"id", "title", "hours", "owner", "due", "done_rule"}], "loads": [{"name", "hours"}], "gap": 0–1, "warnings": [글], "fake": 가짜 답이면 true}` |
 | `POST /api/approve` | `{"team_id"}` | `{"links": [{"name", "url"}]}` |
 | `GET /api/today` | `?member=개인 링크 값` | `{"goals": [...]}` |
 | `POST /api/submit` | `{"member", "goal_id", "content"}` | `{"result": "통과" 또는 "보완 필요", "reasons": [글]}` |
@@ -27,6 +27,6 @@ py -3.13 -m venv .venv
 | 파일 | 담당 |
 |---|---|
 | `app/main.py` | 백엔드 |
-| `app/ai.py` | AI (함수: `make_plan`, `check_submission`) |
+| `app/ai.py` | AI (함수: `make_plan`, `check_submission`). 지금은 연습용 가짜 답 |
 | `app/templates/` | 프론트엔드 |
 | `README.md` | 기획 |

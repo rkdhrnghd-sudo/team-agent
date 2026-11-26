@@ -19,6 +19,6 @@ def test_home():
 
 def test_team_form():
     res = client.get("/")
-    for part in ['id="team-form"', 'id="notice"', 'id="deadline"', 'id="members"']:
+    for part in ['id="team-form"', 'id="notice"', 'id="deadline"', 'id="members"', 'id="plan"', "연습용 가짜 답"]:
         assert part in res.text
     assert "innerHTML" not in res.text
