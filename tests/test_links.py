@@ -14,7 +14,7 @@ def make_plan(n=3):
     members = [{"name": f"팀원{i}", "email": f"m{i}@example.com"} for i in range(n)]
     res = client.post("/api/plan", json={"notice": "보고서 10쪽, 평가", "deadline": DEADLINE, "members": members})
     assert res.status_code == 200
-    return {"deadline": DEADLINE, "members": [m["name"] for m in members], "goals": res.json()["goals"]}
+    return {"deadline": DEADLINE, "members": members, "goals": res.json()["goals"]}
 
 
 def token_of(url):
@@ -26,7 +26,7 @@ def test_approve_gives_one_link_per_member():
     res = client.post("/api/approve", json=plan)
     assert res.status_code == 200
     links = res.json()["links"]
-    assert [l["name"] for l in links] == plan["members"]
+    assert [l["name"] for l in links] == [m["name"] for m in plan["members"]]
     assert sum(l["goals"] for l in links) == len(plan["goals"])
     assert all("/me?t=" in l["url"] for l in links)
 

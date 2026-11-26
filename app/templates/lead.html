@@ -33,6 +33,10 @@
     .clock { border: 1px dashed #2457d6; border-radius: 8px; padding: 10px 12px; margin-top: 12px; background: #f7f9ff; }
     .clock-note { font-size: 13px; color: #666; margin-top: 4px; }
     .late-tag { color: #b00020; font-weight: bold; }
+    details.mail { border-bottom: 1px solid #eee; padding: 6px 0; font-size: 14px; }
+    details.mail summary { cursor: pointer; }
+    details.mail .fail { color: #b00020; font-weight: bold; }
+    details.mail .kind { display: inline-block; min-width: 64px; font-weight: bold; }
   </style>
   <script src="/board.js"></script>
 </head>
@@ -48,8 +52,10 @@
       <button type="button" data-days="1">하루 넘기기</button>
       <button type="button" data-days="7">일주일 넘기기</button>
       <button type="button" id="clock-reset">오늘로 돌아가기</button>
+      <button type="button" id="daily-now">오늘 알림 보내기</button>
     </div>
-    <div class="clock-note">2–4주 과정을 짧게 보여 주기 위한 기능입니다. 이 팀의 날짜만 바뀝니다(최대 60일).</div>
+    <div class="clock-note">2–4주 과정을 짧게 보여 주기 위한 기능입니다. 이 팀의 날짜만 바뀝니다(최대 60일). 날짜를 넘기면 넘긴 날마다 매일 알림이 나갑니다.</div>
+    <div class="clock-note" id="clock-msg"></div>
   </div>
 
   <h2>확인할 것</h2>
@@ -60,9 +66,12 @@
 
   <h2>전체 할 일</h2>
   <table>
-    <thead><tr><th>#</th><th>할 일</th><th>담당</th><th>마감</th><th>상태</th><th>보완 횟수</th></tr></thead>
+    <thead><tr><th>#</th><th>할 일</th><th>담당</th><th>마감</th><th>상태</th><th>보완 횟수</th><th>알림 횟수</th></tr></thead>
     <tbody id="all"></tbody>
   </table>
+
+  <h2>보낸 메일 <span id="mail-badge" class="badge" hidden>연습용: 실제로 안 보냄</span></h2>
+  <div id="outbox"></div>
 
   <script>
     const token = new URLSearchParams(location.search).get("t");
@@ -126,13 +135,15 @@
       const buttons = document.querySelectorAll(".clock button");
       buttons.forEach(b => b.disabled = true);
       try {
-        const res = await fetch("/api/clock", {
+        const res = await fetch(payload ? "/api/clock" : "/api/daily", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lead: token, ...payload }),
+          body: JSON.stringify({ lead: token, ...(payload || {}) }),
         });
         const body = await res.json();
-        if (!res.ok) { document.getElementById("error").textContent = typeof body.detail === "string" ? body.detail : "날짜를 바꾸지 못했습니다."; return; }
+        if (!res.ok) { document.getElementById("error").textContent = typeof body.detail === "string" ? body.detail : "처리하지 못했습니다."; return; }
+        document.getElementById("clock-msg").textContent =
+          body.mails === undefined ? "" : body.mails ? `알림 메일 ${body.mails}통을 만들었습니다(아래 '보낸 메일').` : "새로 보낼 알림이 없습니다(그날 이미 보냈거나 내일까지 할 일이 없음).";
         await load();
       } catch {
         document.getElementById("error").textContent = "서버에 연결하지 못했습니다.";
@@ -144,6 +155,22 @@
     document.querySelectorAll(".clock button[data-days]").forEach(b =>
       b.addEventListener("click", () => moveClock({ days: Number(b.dataset.days) })));
     document.getElementById("clock-reset").addEventListener("click", () => moveClock({ reset: true }));
+    document.getElementById("daily-now").addEventListener("click", () => moveClock(null));
+
+    function showOutbox(body) {
+      document.getElementById("mail-badge").hidden = !body.fake_mail;
+      const box = document.getElementById("outbox");
+      box.replaceChildren();
+      if (!body.outbox.length) { box.append(el("p", "sub", "아직 보낸 메일이 없습니다.")); return; }
+      body.outbox.forEach(m => {
+        const d = el("details", "mail");
+        const s = el("summary");
+        s.append(el("span", "kind", m.kind), document.createTextNode(` ${m.day} · ${m.to} · ${m.subject} `));
+        if (m.mode === "SMTP") s.append(el("span", m.sent ? "" : "fail", m.sent ? "(보냄)" : `(실패: ${m.error})`));
+        d.append(s, el("div", "sub", `받는 곳: ${m.email}`), el("pre", "", m.body));
+        box.append(d);
+      });
+    }
 
     async function load() {
       const err = document.getElementById("error");
@@ -176,8 +203,12 @@
           if (g.overdue) stTd.append(el("span", "late-tag", " · 마감 지남"));
           tr.append(stTd);
           tr.append(el("td", "", g.fix_count));
+          const rem = el("td", "", g.reminders);
+          if (g.no_reply) rem.append(el("span", "late-tag", " · 응답 없음"));
+          tr.append(rem);
           all.append(tr);
         });
+        showOutbox(body);
       } catch {
         err.textContent = "서버에 연결하지 못했습니다.";
       }

@@ -19,7 +19,7 @@ def token_of(url):
 def setup_team():
     members = [{"name": f"팀원{i}", "email": f"m{i}@example.com"} for i in range(3)]
     plan = client.post("/api/plan", json={"notice": "보고서 10쪽, 평가", "deadline": DEADLINE, "members": members}).json()
-    body = client.post("/api/approve", json={"deadline": DEADLINE, "members": [m["name"] for m in members], "goals": plan["goals"]}).json()
+    body = client.post("/api/approve", json={"deadline": DEADLINE, "members": members, "goals": plan["goals"]}).json()
     lead = token_of(body["lead_url"])
     links = {l["name"]: token_of(l["url"]) for l in body["links"]}
     return plan["goals"], lead, links
